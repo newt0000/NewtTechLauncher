@@ -16,17 +16,8 @@
 #include <filesystem>
 #include <stdexcept>
 
-
-#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
-#define DWMWA_WINDOW_CORNER_PREFERENCE 33
-enum DWM_WINDOW_CORNER_PREFERENCE
-{
-    DWMWCP_DEFAULT = 0,
-    DWMWCP_DONOTROUND = 1,
-    DWMWCP_ROUND = 2,
-    DWMWCP_ROUNDSMALL = 3
-
-};
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
 #endif
 
 namespace
@@ -2947,7 +2938,7 @@ void MainWindow::applyModernWindowStyle()
     );
 
     const COLORREF borderColor =
-        static_cast<COLORREF>(0xFFFFFFFE); // DWMWA_COLOR_NONE
+        static_cast<COLORREF>(0xFFFFFFFE);
 
     DwmSetWindowAttribute(
         hwnd_,

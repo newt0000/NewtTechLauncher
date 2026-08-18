@@ -53,13 +53,7 @@ target_link_libraries(NewtTechLauncher PRIVATE
 )
 
 
-if(MINGW)
-    target_link_options(NewtTechLauncher PRIVATE
-            -static
-            -static-libgcc
-            -static-libstdc++
-    )
-endif()
+
 
 
 add_executable(NewtTechInstaller WIN32
