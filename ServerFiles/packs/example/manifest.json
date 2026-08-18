@@ -1,0 +1,26 @@
+{
+  "id": "example",
+  "name": "Example Modpack",
+  "version": "1.0.0",
+  "minecraft": {
+    "version": "1.20.1",
+    "loader": "Forge",
+    "loaderVersion": "47.4.22"
+  },
+  "java": {
+    "minimumVersion": 17,
+    "recommendedMemory": 8192
+  },
+  "server": {
+    "address": "play.example.com"
+  },
+  "files": [
+    {
+      "path": "mods/example-mod.jar",
+      "url": "https://YOUR-DOMAIN-HERE/modpacks/packs/example/files/mods/example-mod.jar",
+      "size": 123456,
+      "sha256": "REPLACE_WITH_SHA256",
+      "policy": "replace"
+    }
+  ]
+}

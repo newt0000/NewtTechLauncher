@@ -1,0 +1,16 @@
+{
+  "launcherVersion": "0.1.0",
+  "packs": [
+    {
+      "id": "example",
+      "name": "Example Modpack",
+      "description": "Starter pack used to verify the launcher connection.",
+      "icon": "https://YOUR-DOMAIN-HERE/modpacks/packs/example/icon.png",
+      "banner": "https://YOUR-DOMAIN-HERE/modpacks/packs/example/banner.png",
+      "manifest": "https://YOUR-DOMAIN-HERE/modpacks/packs/example/manifest.json",
+      "enabled": true,
+      "featured": true,
+      "accent": "#F47A21"
+    }
+  ]
+}

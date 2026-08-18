@@ -1,0 +1,22 @@
+In src/MainWindow.cpp, add this include with the other Windows includes:
+
+#include <objbase.h>
+
+For example:
+
+#include "MainWindow.h"
+
+#include "AppConfig.h"
+#include "HttpClient.h"
+#include "ImageLoader.h"
+#include "JsonLite.h"
+
+#include <windowsx.h>
+#include <objbase.h>
+#include <algorithm>
+#include <stdexcept>
+
+This fixes:
+- COINIT_APARTMENTTHREADED was not declared
+- CoInitializeEx was not declared
+- CoUninitialize was not declared
