@@ -25,6 +25,7 @@ enum DWM_WINDOW_CORNER_PREFERENCE
     DWMWCP_DONOTROUND = 1,
     DWMWCP_ROUND = 2,
     DWMWCP_ROUNDSMALL = 3
+
 };
 #endif
 
@@ -43,6 +44,7 @@ constexpr COLORREF CYAN          = RGB(0, 225, 255);
 constexpr COLORREF SUCCESS       = RGB(84, 230, 196);
 constexpr COLORREF ERROR_BG      = RGB(48, 14, 42);
 constexpr COLORREF ERROR_TEXT    = RGB(255, 125, 205);
+    const COLORREF borderColor = DWMWA_COLOR_NONE;
 
 void fillRectColor(
     HDC dc,
@@ -2942,6 +2944,16 @@ void MainWindow::applyModernWindowStyle()
         DWMWA_WINDOW_CORNER_PREFERENCE,
         &preference,
         sizeof(preference)
+    );
+
+    const COLORREF borderColor =
+        static_cast<COLORREF>(0xFFFFFFFE); // DWMWA_COLOR_NONE
+
+    DwmSetWindowAttribute(
+        hwnd_,
+        DWMWA_BORDER_COLOR,
+        &borderColor,
+        sizeof(borderColor)
     );
 }
 
