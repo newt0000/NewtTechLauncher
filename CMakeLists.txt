@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 project(NewtTechLauncher
         VERSION 0.4.0
         DESCRIPTION "NewtTech Modpack Launcher"
-        LANGUAGES CXX)
+        LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -53,18 +53,17 @@ target_link_libraries(NewtTechLauncher PRIVATE
 )
 
 
-add_executable(NewtTechInstaller WIN32
-        installer/Installer.cpp
-        installer/InstallerConfig.h
-        src/HttpClient.h
-        src/HttpClient.cpp
-        src/JsonLite.h
-        src/JsonLite.cpp
-)
+if(MINGW)
+    target_link_options(NewtTechLauncher PRIVATE
+            -static
+            -static-libgcc
+            -static-libstdc++
+    )
+endif()
 
-target_include_directories(NewtTechInstaller PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/installer
+
+add_executable(NewtTechInstaller WIN32
+        installer/Installer.c
 )
 
 target_compile_definitions(NewtTechInstaller PRIVATE
@@ -80,8 +79,11 @@ target_link_libraries(NewtTechInstaller PRIVATE
         gdi32
         shell32
         ole32
+        uuid
         bcrypt
-        dwmapi
         advapi32
+        dwmapi
 )
+
+# Installer is intentionally pure Win32 C. It does not link libstdc++ or winpthread.
 
