@@ -1,5 +1,4 @@
 #include "MainWindow.h"
-#include "LauncherResources.h"
 
 #include "AppConfig.h"
 #include "HttpClient.h"
@@ -17,9 +16,7 @@
 #include <filesystem>
 #include <stdexcept>
 
-#ifndef DWMWA_BORDER_COLOR
-#define DWMWA_BORDER_COLOR 34
-#endif
+
 
 namespace
 {
@@ -36,7 +33,6 @@ constexpr COLORREF CYAN          = RGB(0, 225, 255);
 constexpr COLORREF SUCCESS       = RGB(84, 230, 196);
 constexpr COLORREF ERROR_BG      = RGB(48, 14, 42);
 constexpr COLORREF ERROR_TEXT    = RGB(255, 125, 205);
-    const COLORREF borderColor = DWMWA_COLOR_NONE;
 
 void fillRectColor(
     HDC dc,
@@ -141,15 +137,7 @@ bool MainWindow::create(
         );
     wc.hbrBackground =
         CreateSolidBrush(BG);
-    wc.hIcon = LoadIconW(
-    instance_,
-    MAKEINTRESOURCEW(IDI_APP_ICON)
-);
 
-    wc.hIconSm = LoadIconW(
-        instance_,
-        MAKEINTRESOURCEW(IDI_APP_ICON)
-    );
     if (!RegisterClassExW(&wc))
         return false;
 
@@ -367,13 +355,12 @@ LRESULT MainWindow::handleMessage(
                 &client
             );
 
+            RECT contentClient = client;
+            contentClient.bottom -= TITLEBAR_HEIGHT;
+
             if (
                 page_ == Page::Modpacks &&
-                pointInRect(
-                    x,
-                    y,
-                    refreshRect(client)
-                )
+                pointInRect(x, contentY, refreshRect(contentClient))
             )
             {
                 refreshPacks();
@@ -398,7 +385,7 @@ LRESULT MainWindow::handleMessage(
                     pointInRect(
                         x,
                         contentY,
-                        repairRect(client)
+                        repairRect(contentClient)
                     )
                 )
                 {
@@ -410,7 +397,7 @@ LRESULT MainWindow::handleMessage(
                     pointInRect(
                         x,
                         contentY,
-                        installRect(client)
+                        installRect(contentClient)
                     )
                 )
                 {
@@ -544,7 +531,7 @@ LRESULT MainWindow::handleMessage(
                     pointInRect(
                         x,
                         contentY,
-                        openFolderRect(client)
+                        openFolderRect(contentClient)
                     )
                 )
                 {
@@ -556,7 +543,7 @@ LRESULT MainWindow::handleMessage(
                     pointInRect(
                         x,
                         contentY,
-                        resetFolderRect(client)
+                        resetFolderRect(contentClient)
                     )
                 )
                 {
@@ -568,7 +555,7 @@ LRESULT MainWindow::handleMessage(
                     pointInRect(
                         x,
                         contentY,
-                        memoryMinusRect(client)
+                        memoryMinusRect(contentClient)
                     )
                 )
                 {
@@ -580,7 +567,7 @@ LRESULT MainWindow::handleMessage(
                     pointInRect(
                         x,
                         contentY,
-                        memoryPlusRect(client)
+                        memoryPlusRect(contentClient)
                     )
                 )
                 {
@@ -2944,16 +2931,6 @@ void MainWindow::applyModernWindowStyle()
         DWMWA_WINDOW_CORNER_PREFERENCE,
         &preference,
         sizeof(preference)
-    );
-
-    const COLORREF borderColor =
-        static_cast<COLORREF>(0xFFFFFFFE);
-
-    DwmSetWindowAttribute(
-        hwnd_,
-        DWMWA_BORDER_COLOR,
-        &borderColor,
-        sizeof(borderColor)
     );
 }
 
