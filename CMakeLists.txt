@@ -29,6 +29,7 @@ add_executable(NewtTechLauncher WIN32
         src/VersionManager.cpp
         src/MainWindow.h
         src/MainWindow.cpp
+        src/LauncherResources.rc
 )
 
 target_compile_definitions(NewtTechLauncher PRIVATE
@@ -58,6 +59,7 @@ target_link_libraries(NewtTechLauncher PRIVATE
 
 add_executable(NewtTechInstaller WIN32
         installer/Installer.c
+        installer/InstallerResources.rc
 )
 
 target_compile_definitions(NewtTechInstaller PRIVATE

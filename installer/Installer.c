@@ -1,5 +1,6 @@
 
 #include <windows.h>
+#include "InstallerResources.h"
 #include <windowsx.h>
 #include <winhttp.h>
 #include <shlobj.h>
@@ -1443,7 +1444,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     wc.lpfnWndProc = wnd_proc;
     wc.lpszClassName = L"NewtTechStandaloneInstaller";
     wc.hCursor = LoadCursorW(NULL,IDC_ARROW);
+    wc.hIcon = LoadIconW(
+    inst,
+    MAKEINTRESOURCEW(IDI_INSTALLER_ICON)
+);
 
+    wc.hIconSm = LoadIconW(
+        inst,
+        MAKEINTRESOURCEW(IDI_INSTALLER_ICON)
+    );
     if (!RegisterClassExW(&wc))
         return 1;
 

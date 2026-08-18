@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "LauncherResources.h"
 
 #include "AppConfig.h"
 #include "HttpClient.h"
@@ -140,7 +141,15 @@ bool MainWindow::create(
         );
     wc.hbrBackground =
         CreateSolidBrush(BG);
+    wc.hIcon = LoadIconW(
+    instance_,
+    MAKEINTRESOURCEW(IDI_APP_ICON)
+);
 
+    wc.hIconSm = LoadIconW(
+        instance_,
+        MAKEINTRESOURCEW(IDI_APP_ICON)
+    );
     if (!RegisterClassExW(&wc))
         return false;
 
