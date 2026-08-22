@@ -75,7 +75,12 @@ HBITMAP ImageLoader::loadFromUrl(
     if (SUCCEEDED(hr))
         hr = converter->Initialize(
             scaler,
-            GUID_WICPixelFormat32bppBGR,
+            /*
+                Keep PNG transparency and convert directly to
+                premultiplied BGRA, which is the format expected by
+                Win32 AlphaBlend with AC_SRC_ALPHA.
+            */
+            GUID_WICPixelFormat32bppPBGRA,
             WICBitmapDitherTypeNone,
             nullptr,
             0.0,
