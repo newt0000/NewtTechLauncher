@@ -35,6 +35,7 @@ Instead of requiring players to manually assemble mods, match Forge versions, cr
 
 Select a pack, install it, and launch it through the official Minecraft Launcher.
 
+<span style="color:red;"><strong>NOTE:</strong> this software does not collect information or contain any malicious code, as of now im awaiting SignPath's response for my CodeSign application to sign the code, windows defender may or will flag it as unknown and potentially malicious you can tap more info and launch anyway to bypass this</span>
 <p align="center">
   <img src="assets/screenshots/modpack-page.png" alt="NewtTech Launcher Modpacks page" width="900">
 </p>
