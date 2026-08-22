@@ -43,6 +43,7 @@ target_link_libraries(NewtTechLauncher PRIVATE
         winhttp
         user32
         gdi32
+        msimg32
         comctl32
         shell32
         ole32
@@ -73,6 +74,7 @@ target_link_libraries(NewtTechInstaller PRIVATE
         winhttp
         user32
         gdi32
+        msimg32
         shell32
         ole32
         uuid

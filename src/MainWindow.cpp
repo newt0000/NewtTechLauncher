@@ -17,7 +17,6 @@
 #include <stdexcept>
 
 
-
 namespace
 {
 constexpr COLORREF BG            = RGB(5, 10, 24);
@@ -125,6 +124,9 @@ bool MainWindow::create(
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
+    wc.style =
+        CS_HREDRAW |
+        CS_VREDRAW;
     wc.hInstance = instance_;
     wc.lpfnWndProc =
         &MainWindow::windowProc;
@@ -603,12 +605,149 @@ LRESULT MainWindow::handleMessage(
             return 0;
         }
 
+        case WM_ENTERSIZEMOVE:
+        {
+            /*
+                Interactive resize is about to begin. Do not let Windows
+                preserve/stretch the old client pixels while the pointer moves.
+            */
+            InvalidateRect(
+                hwnd_,
+                nullptr,
+                FALSE
+            );
+
+            return 0;
+        }
+
+        case WM_SIZING:
+        {
+            InvalidateRect(
+                hwnd_,
+                nullptr,
+                FALSE
+            );
+
+            return TRUE;
+        }
+
+        case WM_SIZE:
+        {
+            if (wParam != SIZE_MINIMIZED)
+            {
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+            }
+
+            return 0;
+        }
+
+        case WM_WINDOWPOSCHANGED:
+        {
+
+            const LRESULT result =
+                DefWindowProcW(
+                    hwnd,
+                    message,
+                    wParam,
+                    lParam
+                );
+
+            if (!IsIconic(hwnd_))
+            {
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                UpdateWindow(hwnd_);
+            }
+
+            return result;
+        }
+
+        case WM_EXITSIZEMOVE:
+        {
+            RedrawWindow(
+                hwnd_,
+                nullptr,
+                nullptr,
+                RDW_INVALIDATE |
+                RDW_UPDATENOW |
+                RDW_ALLCHILDREN
+            );
+
+            return 0;
+        }
+
+        case WM_ACTIVATE:
+        {
+            /*
+                DWM can reconsider border appearance when activation changes.
+                Re-assert the no-border attributes, then repaint ONLY the
+                client area. Do not request RDW_FRAME/WM_NCPAINT.
+            */
+            applyModernWindowStyle();
+
+            InvalidateRect(
+                hwnd_,
+                nullptr,
+                FALSE
+            );
+
+            UpdateWindow(hwnd_);
+
+            return 0;
+        }
+
+        case WM_NCACTIVATE:
+        {
+            /*
+                We own the complete frame. Prevent DefWindowProc from drawing
+                the normal active/inactive non-client border.
+            */
+            applyModernWindowStyle();
+            return TRUE;
+        }
+
+        case WM_NCPAINT:
+        {
+            /*
+                Critical for the gray-focus-border bug: WS_THICKFRAME normally
+                causes Windows/DWM to paint a non-client outline here. The
+                launcher paints every visible pixel itself.
+            */
+            return 0;
+        }
+
+        case WM_DWMCOMPOSITIONCHANGED:
+        case WM_THEMECHANGED:
+        {
+            applyModernWindowStyle();
+
+            InvalidateRect(
+                hwnd_,
+                nullptr,
+                FALSE
+            );
+
+            UpdateWindow(hwnd_);
+
+            return 0;
+        }
+
         case WM_NCCALCSIZE:
         {
-            if (wParam)
-                return 0;
-
-            break;
+            /*
+                Make the complete outer window our client area. WS_THICKFRAME
+                remains only so Windows honors HTLEFT/HTRIGHT/etc. resizing;
+                none of its visual frame is allowed to paint.
+            */
+            return 0;
         }
 
         case WM_NCHITTEST:
@@ -1723,14 +1862,22 @@ void MainWindow::drawBitmapCover(
 
     BITMAP bm{};
 
-    GetObject(
-        bitmap,
-        sizeof(bm),
-        &bm
-    );
+    if (
+        GetObject(
+            bitmap,
+            sizeof(bm),
+            &bm
+        ) == 0
+    )
+    {
+        return;
+    }
 
     HDC source =
         CreateCompatibleDC(dc);
+
+    if (!source)
+        return;
 
     HBITMAP old =
         static_cast<HBITMAP>(
@@ -1740,12 +1887,24 @@ void MainWindow::drawBitmapCover(
             )
         );
 
+    /*
+        ImageLoader stores artwork as 32bpp premultiplied BGRA.
+        AlphaBlend composites transparent PNG pixels over whatever is
+        already painted in the launcher instead of copying the RGB
+        values of transparent pixels as an opaque black rectangle.
+    */
+    BLENDFUNCTION blend{};
+    blend.BlendOp = AC_SRC_OVER;
+    blend.BlendFlags = 0;
+    blend.SourceConstantAlpha = 255;
+    blend.AlphaFormat = AC_SRC_ALPHA;
+
     SetStretchBltMode(
         dc,
         HALFTONE
     );
 
-    StretchBlt(
+    AlphaBlend(
         dc,
         target.left,
         target.top,
@@ -1756,7 +1915,7 @@ void MainWindow::drawBitmapCover(
         0,
         bm.bmWidth,
         bm.bmHeight,
-        SRCCOPY
+        blend
     );
 
     SelectObject(
@@ -2923,14 +3082,48 @@ LRESULT MainWindow::hitTestNonClient(
 
 void MainWindow::applyModernWindowStyle()
 {
-    DWM_WINDOW_CORNER_PREFERENCE preference =
-        DWMWCP_DONOTROUND;
+    /*
+        DWMWA_WINDOW_CORNER_PREFERENCE = 33
+        DWMWCP_DONOTROUND = 1
+    */
+    const DWORD cornerPreference = 1;
 
     DwmSetWindowAttribute(
         hwnd_,
-        DWMWA_WINDOW_CORNER_PREFERENCE,
-        &preference,
-        sizeof(preference)
+        33,
+        &cornerPreference,
+        sizeof(cornerPreference)
+    );
+
+    /*
+        DWMWA_BORDER_COLOR = 34
+        DWMWA_COLOR_NONE = 0xFFFFFFFE
+
+        This suppresses the Windows 11 DWM border while keeping DWM itself
+        active for normal window management/resizing behavior.
+    */
+    const COLORREF borderColor =
+        static_cast<COLORREF>(0xFFFFFFFEu);
+
+    DwmSetWindowAttribute(
+        hwnd_,
+        34,
+        &borderColor,
+        sizeof(borderColor)
+    );
+
+    /*
+        DWMWA_TRANSITIONS_FORCEDISABLED = 3
+        Prevent activation/theme transitions from briefly animating the
+        standard frame back over the custom NewtTech frame.
+    */
+    const BOOL transitionsDisabled = TRUE;
+
+    DwmSetWindowAttribute(
+        hwnd_,
+        3,
+        &transitionsDisabled,
+        sizeof(transitionsDisabled)
     );
 }
 
