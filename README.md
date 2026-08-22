@@ -1,351 +1,320 @@
 # NewtTech Launcher
 
-```{=html}
 <p align="center">
-```
-`<img src="assets/launcher-logo.png" alt="NewtTech Launcher" width="180">`{=html}
-```{=html}
+  <img src="assets/icon.png" alt="NewtTech Launcher" width="180">
 </p>
-```
-```{=html}
-<p align="center">
-```
-`<strong>`{=html}A lightweight Windows launcher for managed Minecraft
-modpacks.`</strong>`{=html}
-```{=html}
-</p>
-```
-```{=html}
-<p align="center">
-```
-`<a href="https://github.com/newt0000/NewtTechLauncher/releases">`{=html}
-`<img src="https://img.shields.io/github/v/release/newt0000/NewtTechLauncher?style=for-the-badge&label=Release" alt="Latest Release">`{=html}
-`</a>`{=html}
-`<a href="https://github.com/newt0000/NewtTechLauncher/releases">`{=html}
-`<img src="https://img.shields.io/github/downloads/newt0000/NewtTechLauncher/total?style=for-the-badge&label=GitHub%20Downloads" alt="GitHub Downloads">`{=html}
-`</a>`{=html}
-`<img src="https://img.shields.io/badge/Platform-Windows-0078D4?style=for-the-badge" alt="Windows">`{=html}
-`<img src="https://img.shields.io/badge/Language-C%2B%2B-00599C?style=for-the-badge" alt="C++">`{=html}
-`<a href="LICENSE">`{=html}
-`<img src="https://img.shields.io/badge/License-CC0--1.0-44CC11?style=for-the-badge" alt="CC0-1.0">`{=html}
-`</a>`{=html}
-```{=html}
-</p>
-```
 
-------------------------------------------------------------------------
+<p align="center">
+  <strong>A modern native Windows launcher for managed Minecraft modpacks.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/newt0000/NewtTechLauncher/releases/latest"><img src="https://img.shields.io/github/v/release/newt0000/NewtTechLauncher?style=for-the-badge&label=Release" alt="Latest Release"></a>
+  <a href="https://github.com/newt0000/NewtTechLauncher/releases"><img src="https://img.shields.io/github/downloads/newt0000/NewtTechLauncher/total?style=for-the-badge&label=Downloads" alt="Downloads"></a>
+  <a href="https://github.com/newt0000/NewtTechLauncher/actions/workflows/build.yml"><img src="https://img.shields.io/github/actions/workflow/status/newt0000/NewtTechLauncher/build.yml?branch=main&style=for-the-badge&label=Build" alt="Build Status"></a>
+  <img src="https://img.shields.io/badge/Platform-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?style=for-the-badge&logo=cplusplus&logoColor=white" alt="C++20">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-CC0--1.0-44CC11?style=for-the-badge" alt="CC0-1.0"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/newt0000/NewtTechLauncher/releases/latest"><strong>Download Latest Release</strong></a>
+  ·
+  <a href="https://github.com/newt0000/NewtTechLauncher/issues">Report a Bug</a>
+  ·
+  <a href="https://github.com/newt0000/NewtTechLauncher/actions">Builds</a>
+</p>
+
+---
 
 ## About NewtTech Launcher
 
-**NewtTech Launcher** is a native Windows launcher designed to make
-installing, maintaining, and launching managed Minecraft modpacks
-simple.
+**NewtTech Launcher** is a native Windows application built to simplify installing, maintaining, repairing, and launching managed Minecraft modpacks.
 
-Instead of asking players to manually download mods, configure Forge,
-create Minecraft installations, and maintain matching mod versions,
-NewtTech Launcher handles the process automatically from centrally
-managed pack manifests.
+Instead of requiring players to manually assemble mods, match Forge versions, create Minecraft profiles, and keep files synchronized, the launcher uses remotely managed pack manifests to automate the process.
 
-Select a pack, install it, and launch it through the official Minecraft
-Launcher.
+Select a pack, install it, and launch it through the official Minecraft Launcher.
 
-```{=html}
 <p align="center">
-```
-`<img src="assets/screenshots/modpacks.png" alt="NewtTech Launcher Modpacks" width="900">`{=html}
-```{=html}
+  <img src="assets/screenshots/modpack-page.png" alt="NewtTech Launcher Modpacks page" width="900">
 </p>
-```
 
-------------------------------------------------------------------------
+---
 
 ## Features
 
-### Managed Modpacks
+### Managed Modpack Library
 
-NewtTech Launcher retrieves the available modpack catalog from the
-NewtTech launcher service and presents packs through a native Windows
-interface.
+Available packs are retrieved from the NewtTech launcher service and displayed directly in the launcher.
 
 Each pack can provide:
 
--   Pack name and description
--   Custom icon
--   Custom banner
--   Pack version
--   Minecraft version
--   Forge version
--   Server information
--   Managed file list
--   Installation metadata
-
-Pack artwork supports PNG transparency and is displayed directly inside
-the launcher interface.
+- Pack name and description
+- Custom transparent PNG icon
+- Custom banner artwork
+- Pack version
+- Minecraft version
+- Forge version
+- Server address
+- Managed file count
+- Installation metadata
 
 ### Automatic Installation
 
-Installing a pack automatically creates and manages its own instance
-directory.
+The launcher automatically creates and prepares a dedicated instance for each pack.
 
-The launcher can download:
+Managed content can include:
 
--   Mods
--   Configuration files
--   Pack resources
--   Required managed files
--   Minecraft version metadata
--   Forge version files
+- Mods
+- Configuration files
+- Resource files
+- Pack-specific assets
+- Required supporting files
+- Minecraft version data
+- Forge version files
 
-Files are downloaded according to the server-provided pack manifest,
-removing the need for players to manually assemble the modpack.
+The pack manifest determines which files belong to an installation, eliminating the need to manually assemble the modpack.
 
-```{=html}
 <p align="center">
-```
-`<img src="assets/screenshots/install.png" alt="NewtTech Launcher installation" width="900">`{=html}
-```{=html}
+  <img src="assets/screenshots/installer.png" alt="NewtTech Launcher installation" width="900">
 </p>
-```
+
 ### Minecraft Launcher Integration
 
-NewtTech Launcher works alongside the **official Minecraft Launcher**
-rather than replacing Minecraft authentication or account management.
+NewtTech Launcher works alongside the **official Minecraft Launcher**.
 
-When a pack is prepared, NewtTech Launcher can automatically create a
-Minecraft installation profile configured with:
+It does not replace Microsoft or Minecraft authentication.
 
--   The required Minecraft version
--   The required Forge version
--   The pack's dedicated instance directory
--   The pack's custom icon
+For supported packs, the launcher can automatically create a Minecraft installation profile containing:
 
-The official Minecraft Launcher can then be opened with the installation
-ready to use.
+- The required Minecraft version
+- The required Forge version
+- A dedicated game directory
+- Pack-specific profile information
+- A custom pack icon
+
+After preparation, the official Minecraft Launcher can be opened with the installation ready to launch.
 
 ### Automatic Forge Provisioning
 
-Players do not need to manually install the Forge version required by a
-managed pack.
+The required Forge installation can be provisioned automatically.
 
-NewtTech Launcher can retrieve the appropriate Forge version package
-from the launcher service and provision it into:
+Version files are installed into the normal Minecraft versions directory:
 
-``` text
+```text
 .minecraft/versions/
 ```
 
-The generated Minecraft installation profile is then configured to use
-that version.
+The generated Minecraft profile is then configured to use the appropriate Forge version.
 
 ### Verify & Repair
 
-Installed packs can be checked using **Verify / Repair**.
+**Verify / Repair** checks an installed pack against its managed manifest.
 
-The launcher compares the managed installation against the pack manifest
-and can restore files that are:
+It can recover files that are:
 
--   Missing
--   Damaged
--   Outdated
--   Incorrect
+- Missing
+- Damaged
+- Outdated
+- Incorrect
 
-This provides a simple recovery option when a modpack stops working
-without requiring a complete manual reinstall.
+This makes it possible to repair a pack without manually finding and replacing individual files.
 
-### Pack Updates
+### Refreshable Pack Catalog
 
-Pack contents are controlled through remote manifests. The **Refresh**
-function retrieves current pack metadata without requiring the launcher
-to be reinstalled.
+The **Refresh** function retrieves current launcher and pack metadata from the server.
 
-### Dedicated Instances
+Pack information can therefore be updated remotely without requiring users to reinstall the launcher.
 
-Each modpack receives its own managed instance directory, keeping
-pack-specific files separate from the player's primary Minecraft
-installation and allowing multiple managed packs to coexist.
+### Dedicated Pack Instances
+
+Each managed modpack uses its own instance directory.
+
+This keeps pack-specific mods and configuration separate from the player's primary Minecraft installation and allows multiple managed packs to coexist.
 
 ### Downloads
 
-The Downloads section provides visibility into launcher-managed
-downloads and installation activity.
+The Downloads section provides a dedicated view for launcher-managed download activity.
 
-```{=html}
 <p align="center">
-```
-`<img src="assets/screenshots/downloads.png" alt="NewtTech Launcher Downloads" width="900">`{=html}
-```{=html}
+  <img src="assets/screenshots/downloads.png" alt="NewtTech Launcher Downloads page" width="900">
 </p>
-```
+
 ### Settings
 
-Launcher preferences and configurable behavior are available from the
-dedicated Settings section.
+Launcher preferences and configurable behavior are available from the Settings section.
 
-```{=html}
 <p align="center">
-```
-`<img src="assets/screenshots/settings.png" alt="NewtTech Launcher Settings" width="900">`{=html}
-```{=html}
+  <img src="assets/screenshots/settings.png" alt="NewtTech Launcher Settings page" width="900">
 </p>
-```
 
-------------------------------------------------------------------------
+---
 
 ## Native Windows Interface
 
-NewtTech Launcher is built as a native Windows application.
+NewtTech Launcher uses a custom native Windows interface rather than an embedded web page.
 
 The interface includes:
 
--   Custom NewtTech window frame
--   Resizable window
--   Custom title bar
--   Native minimize, maximize, and close controls
--   Modern dark navy interface
--   Cyan and magenta accents
--   Pack cards
--   Transparent PNG artwork
--   Dynamic layouts
--   Custom pack banners and icons
+- Custom NewtTech title bar and window frame
+- Resizable application window
+- Custom minimize, maximize, and close controls
+- Dark navy visual theme
+- Cyan and magenta accents
+- Dynamic pack cards
+- Pack banners and icons
+- PNG alpha transparency
+- Responsive layout
+- Native Win32 drawing and controls
 
-The launcher does not require an embedded browser to render its primary
-interface.
+---
 
-------------------------------------------------------------------------
+## How It Works
 
-## Launcher Workflow
-
-``` text
+```text
 NewtTech Launcher
         │
         ▼
-Download Pack Manifest
+Retrieve Pack Manifest
         │
         ▼
 Select Modpack
         │
-        ├───────────────┐
-        ▼               ▼
-     Install       Verify / Repair
-        │               │
-        └───────┬───────┘
-                ▼
-       Prepare Instance
-                │
-                ▼
-       Provision Forge
-                │
-                ▼
- Create Minecraft Profile
-                │
-                ▼
- Open Minecraft Launcher
-                │
-                ▼
-              Play
+        ├──────────────────┐
+        ▼                  ▼
+     Install          Verify / Repair
+        │                  │
+        └─────────┬────────┘
+                  ▼
+          Prepare Instance
+                  │
+                  ▼
+          Provision Forge
+                  │
+                  ▼
+      Create Minecraft Profile
+                  │
+                  ▼
+      Open Minecraft Launcher
+                  │
+                  ▼
+                 Play
 ```
 
-------------------------------------------------------------------------
+---
 
 ## Installation
 
-### Recommended
+### Download the Installer
 
-Download the latest **NewtTech Installer** from the official project
-release.
+<p align="center">
+  <a href="https://github.com/newt0000/NewtTechLauncher/releases/latest">
+    <img src="https://img.shields.io/badge/Download-NewtTech%20Installer-ff1493?style=for-the-badge&logo=windows&logoColor=white" alt="Download NewtTech Installer">
+  </a>
+</p>
 
-[![Download NewtTech
-Launcher](https://img.shields.io/badge/Download-NewtTech%20Launcher-ff1493?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/newt0000/NewtTechLauncher/releases/latest)
+Download the latest release and run:
 
-Run:
-
-``` text
+```text
 NewtTechInstaller.exe
 ```
 
-The installer handles installation of the launcher and its required
-components, creates the uninstall entry, and can create shortcuts for
-convenient access.
+The installer handles installation of the launcher and its required runtime components.
 
-------------------------------------------------------------------------
+It can also:
+
+- Create a desktop shortcut
+- Create Start Menu shortcuts
+- Register the uninstaller
+- Launch NewtTech Launcher when installation completes
+
+---
 
 ## System Requirements
 
-Component           Requirement
-  ------------------- ---------------------------------------------
-Operating System    Windows 10 / Windows 11
-Architecture        x64
-Minecraft           Official Minecraft Launcher installed
-Network             Internet connection
-Storage             Depends on installed modpacks
-Minecraft Account   Required by the official Minecraft Launcher
+| Component | Requirement |
+| --- | --- |
+| Operating System | Windows 10 or Windows 11 |
+| Architecture | x64 |
+| Minecraft | Official Minecraft Launcher |
+| Network | Internet connection |
+| Storage | Varies by installed modpack |
+| Minecraft Account | Managed by the official Minecraft Launcher |
 
-Individual modpacks may have additional memory, GPU, storage, or
-Minecraft requirements.
+Individual packs may require additional RAM, storage, or graphics capability.
 
-------------------------------------------------------------------------
+---
 
 ## Building From Source
 
-NewtTech Launcher uses **CMake** and a MinGW-compatible toolchain.
+NewtTech Launcher uses **CMake**, **Ninja**, and **MinGW-w64/GCC**.
 
 ### Requirements
 
--   CMake
--   Ninja
--   MinGW-w64 / GCC
--   Windows SDK-compatible headers and libraries
--   Git
+- Git
+- CMake
+- Ninja
+- MinGW-w64 / GCC
+- Windows-compatible development headers and libraries
 
 Clone the repository:
 
-``` bash
+```bash
 git clone https://github.com/newt0000/NewtTechLauncher.git
 cd NewtTechLauncher
 ```
 
-Configure:
+Configure a release build:
 
-``` bash
+```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 ```
 
-Build:
+Build the project:
 
-``` bash
+```bash
 cmake --build build
 ```
 
-The project contains separate targets for:
+The primary Windows targets are:
 
-``` text
+```text
 NewtTechLauncher
 NewtTechInstaller
 ```
 
-------------------------------------------------------------------------
+---
 
-## Automated Builds
+## Automated GitHub Builds
 
-Official source builds can be produced using **GitHub Actions**.
+NewtTech Launcher includes a GitHub Actions build pipeline.
 
-The Windows build pipeline:
+<p align="center">
+  <a href="https://github.com/newt0000/NewtTechLauncher/actions/workflows/build.yml">
+    <img src="https://github.com/newt0000/NewtTechLauncher/actions/workflows/build.yml/badge.svg" alt="Build NewtTech Launcher">
+  </a>
+</p>
 
-1.  Checks out the public repository
-2.  Creates a Windows MinGW build environment
-3.  Configures the project with CMake
-4.  Builds `NewtTechLauncher.exe`
-5.  Builds `NewtTechInstaller.exe`
-6.  Packages the resulting Windows binaries as a build artifact
+The workflow:
 
-[![Build NewtTech
-Launcher](https://github.com/newt0000/NewtTechLauncher/actions/workflows/build.yml/badge.svg)](https://github.com/newt0000/NewtTechLauncher/actions/workflows/build.yml)
+1. Checks out the public source repository.
+2. Creates a Windows MinGW build environment.
+3. Configures the project with CMake.
+4. Builds `NewtTechLauncher.exe`.
+5. Builds `NewtTechInstaller.exe`.
+6. Uploads both executables as a GitHub Actions artifact.
 
-------------------------------------------------------------------------
+The resulting unsigned build artifact is named:
+
+```text
+newttech-windows-unsigned
+```
+
+---
 
 ## Project Structure
 
-``` text
+```text
 NewtTechLauncher/
 │
 ├── .github/
@@ -380,14 +349,15 @@ NewtTechLauncher/
 └── README.md
 ```
 
-------------------------------------------------------------------------
+---
 
-## Server-Side Pack Management
+## Pack Management
 
-NewtTech Launcher is designed around remotely managed pack manifests. A
-pack definition can describe information such as:
+NewtTech Launcher is built around remotely managed pack manifests.
 
-``` json
+A pack can define information such as:
+
+```json
 {
   "name": "Example Pack",
   "version": "1.0.0",
@@ -397,112 +367,129 @@ pack definition can describe information such as:
 }
 ```
 
-Managed files are downloaded from the configured launcher service and
-installed into the appropriate instance, allowing pack administrators to
-update managed content without requiring players to manually replace
-individual files.
+The launcher uses the server-provided metadata and managed file list to construct and maintain the local instance.
 
-------------------------------------------------------------------------
+This allows pack content to be updated centrally without requiring players to manually locate and replace individual files.
 
-## Artwork
+---
 
-Each pack can provide its own icon, banner, and Minecraft profile icon.
-PNG artwork can include alpha transparency.
+## Artwork Support
 
-Example asset layout:
+Managed packs can provide their own visual identity.
 
-``` text
+Supported artwork includes:
+
+- Pack icons
+- Pack banners
+- Minecraft profile icons
+- Launcher artwork
+
+PNG artwork supports alpha transparency.
+
+Recommended repository layout for README artwork:
+
+```text
 assets/
 ├── launcher-logo.png
-├── screenshots/
-│   ├── modpacks.png
-│   ├── install.png
-│   ├── downloads.png
-│   └── settings.png
-└── packs/
-    ├── example-icon.png
-    └── example-banner.png
+└── screenshots/
+    ├── modpacks.png
+    ├── install.png
+    ├── downloads.png
+    └── settings.png
 ```
 
-------------------------------------------------------------------------
+If your filenames differ, simply change the corresponding `src="..."` paths in this README.
 
-## Security
+---
 
-NewtTech Launcher does not replace Minecraft or Microsoft
-authentication. Authentication remains handled by the official Minecraft
-Launcher.
+## Security & Code Signing
 
-Managed content is retrieved from the configured NewtTech launcher
-service over HTTPS. Official Windows builds are intended to be produced
-from the public repository through the project's GitHub Actions build
-pipeline.
+NewtTech Launcher does not handle Microsoft account credentials itself. Minecraft authentication remains the responsibility of the official Minecraft Launcher.
 
-See [`CODE_SIGNING.md`](CODE_SIGNING.md) for information about the
-project's release and code-signing policy.
+Managed launcher and modpack content is retrieved from the configured launcher service over HTTPS.
 
-------------------------------------------------------------------------
+Official builds are designed to be reproducibly built from the public source repository through GitHub Actions.
+
+For code-signing and release-build information, see:
+
+**[CODE_SIGNING.md](CODE_SIGNING.md)**
+
+---
 
 ## Troubleshooting
 
-### Pack does not appear
+### A pack does not appear
 
 Use **Refresh** to retrieve the latest pack manifest.
 
-### Pack will not launch
+### A pack will not launch
 
-Run **Verify / Repair** first to check the managed installation.
+Run **Verify / Repair** to check the managed installation before reinstalling the entire pack.
 
 ### Minecraft installation is missing
 
-Make sure the official Minecraft Launcher has been installed and
-launched at least once.
+Install the official Minecraft Launcher and launch it at least once.
 
-### Forge installation is missing
+### Forge is missing
 
-Use **Verify / Repair** or reinstall the affected pack so the required
-version files can be provisioned.
+Use **Verify / Repair** or reinstall the affected pack so the required Forge version can be provisioned.
 
-### Mods are missing
+### Mods or managed files are missing
 
-Run **Verify / Repair** to compare the instance against the managed pack
-manifest.
+Use **Verify / Repair** to compare the local instance against the current server manifest.
 
-------------------------------------------------------------------------
+---
+
+## Releases
+
+<p align="center">
+  <a href="https://github.com/newt0000/NewtTechLauncher/releases/latest">
+    <img src="https://img.shields.io/github/v/release/newt0000/NewtTechLauncher?style=for-the-badge&label=Latest%20Release" alt="Latest Release">
+  </a>
+  <a href="https://github.com/newt0000/NewtTechLauncher/releases">
+    <img src="https://img.shields.io/github/downloads/newt0000/NewtTechLauncher/total?style=for-the-badge&label=Total%20Downloads" alt="Total Downloads">
+  </a>
+</p>
+
+Release history and downloadable builds are available from the repository's **Releases** section.
+
+---
 
 ## Development Status
 
-NewtTech Launcher is under active development. Features, manifest
-formats, server APIs, and user-interface behavior may evolve between
-releases.
+NewtTech Launcher is under active development.
 
-Bug reports and feature requests are welcome through GitHub Issues.
+Launcher behavior, server APIs, manifest formats, installation behavior, and interface components may continue to evolve between releases.
 
-[![Issues](https://img.shields.io/github/issues/newt0000/NewtTechLauncher?style=for-the-badge)](https://github.com/newt0000/NewtTechLauncher/issues)
+Found a problem or have an improvement in mind?
 
-------------------------------------------------------------------------
+<p align="center">
+  <a href="https://github.com/newt0000/NewtTechLauncher/issues">
+    <img src="https://img.shields.io/github/issues/newt0000/NewtTechLauncher?style=for-the-badge&label=Open%20Issues" alt="Open Issues">
+  </a>
+</p>
+
+---
 
 ## License
 
 NewtTech Launcher is released under **CC0 1.0 Universal**.
 
-See [`LICENSE`](LICENSE) for the complete license terms.
+See **[LICENSE](LICENSE)** for the complete license terms.
 
-[![CC0](https://img.shields.io/badge/License-CC0%201.0-lightgrey?style=for-the-badge)](LICENSE)
-
-------------------------------------------------------------------------
-
-```{=html}
 <p align="center">
-```
-`<img src="assets/launcher-logo.png" alt="NewtTech Launcher" width="96">`{=html}
-```{=html}
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-CC0%201.0-lightgrey?style=for-the-badge" alt="CC0 1.0 Universal">
+  </a>
 </p>
-```
-```{=html}
+
+---
+
 <p align="center">
-```
-`<strong>`{=html}NewtTech Launcher`</strong>`{=html}`<br>`{=html}
-Install. Repair. Launch.
-```{=html}
+  <img src="assets/launcher-logo.png" alt="NewtTech Launcher" width="96">
 </p>
-```
+
+<p align="center">
+  <strong>NewtTech Launcher</strong><br>
+  Install. Repair. Launch.
+</p>
