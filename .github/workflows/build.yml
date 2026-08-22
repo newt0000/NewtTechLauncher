@@ -1,0 +1,69 @@
+name: Build NewtTech Launcher
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    name: Build Windows binaries
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 / MinGW
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+
+      - name: Configure CMake
+        shell: msys2 {0}
+        run: |
+          cmake \
+            -S . \
+            -B build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build launcher
+        shell: msys2 {0}
+        run: |
+          cmake --build build --target NewtTechLauncher
+
+      - name: Build installer
+        shell: msys2 {0}
+        run: |
+          cmake --build build --target NewtTechInstaller
+
+      - name: Collect binaries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+
+          Copy-Item `
+            "build\NewtTechLauncher.exe" `
+            "dist\NewtTechLauncher.exe"
+
+          Copy-Item `
+            "build\NewtTechInstaller.exe" `
+            "dist\NewtTechInstaller.exe"
+
+      - name: Upload unsigned build
+        uses: actions/upload-artifact@v4
+        with:
+          name: newttech-windows-unsigned
+          path: dist/*
+          if-no-files-found: error
