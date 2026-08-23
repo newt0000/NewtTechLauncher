@@ -11,4 +11,10 @@ public:
         int width,
         int height
     );
+
+    static HBITMAP loadFromUrlPreserveAspect(
+        const std::wstring& url,
+        int maxWidth,
+        int maxHeight
+    );
 };

@@ -37,6 +37,19 @@ private:
     std::vector<NewsItem> news_;
     std::wstring newsStatus_ = L"News has not been loaded yet.";
     int openNewsIndex_ = -1;
+
+    int newsModalScrollY_ = 0;
+    int newsModalMaxScroll_ = 0;
+    bool newsModalScrollbarDragging_ = false;
+    int newsModalScrollbarDragOffset_ = 0;
+
+    struct NewsMarkdownLink
+    {
+        RECT rect{};
+        std::wstring url;
+    };
+
+    std::vector<NewsMarkdownLink> newsModalLinks_;
     PackManifest currentManifest_;
     int selectedPack_ = -1;
 
@@ -77,6 +90,7 @@ private:
     void paintPackList(HDC dc, const RECT& client);
     void paintPackDetails(HDC dc, const RECT& client);
     void drawBitmapCover(HDC dc, HBITMAP bitmap, const RECT& target);
+    void drawBitmapFit(HDC dc, HBITMAP bitmap, const RECT& target);
 
     void refreshPacks();
     void selectPack(int index);
@@ -90,6 +104,15 @@ private:
     RECT newsCardRect(const RECT& client, int index) const;
     RECT newsModalRect(const RECT& client) const;
     RECT newsModalCloseRect(const RECT& client) const;
+    RECT newsModalScrollbarTrackRect(const RECT& client) const;
+    RECT newsModalScrollbarThumbRect(const RECT& client) const;
+    void setNewsModalScroll(int value);
+    LONG renderNewsMarkdown(
+        HDC dc,
+        const std::wstring& markdown,
+        const RECT& bounds,
+        bool draw
+    );
     void paintNewsModal(HDC dc, const RECT& client);
 
     void startInstallOrRepair();

@@ -50,50 +50,7 @@ void fillRectColor(
 
     DeleteObject(brush);
 }
-    static std::wstring formatNewsDate(const std::wstring& iso)
-{
-    // Expected:
-    // YYYY-MM-DDTHH:MM:SS+00:00
 
-    if (iso.length() < 16)
-        return iso;
-
-    try
-    {
-        const int year   = std::stoi(iso.substr(0, 4));
-        const int month  = std::stoi(iso.substr(5, 2));
-        const int day    = std::stoi(iso.substr(8, 2));
-        int hour         = std::stoi(iso.substr(11, 2));
-        const int minute = std::stoi(iso.substr(14, 2));
-
-        const bool pm = hour >= 12;
-
-        int displayHour = hour % 12;
-
-        if (displayHour == 0)
-            displayHour = 12;
-
-        wchar_t buffer[64];
-
-        swprintf(
-            buffer,
-            64,
-            L"%02d:%02d%ls %02d/%02d/%04d",
-            displayHour,
-            minute,
-            pm ? L"PM" : L"AM",
-            month,
-            day,
-            year
-        );
-
-        return buffer;
-    }
-    catch (...)
-    {
-        return iso;
-    }
-}
 void drawTextSimple(
     HDC dc,
     const std::wstring& text,
@@ -150,6 +107,49 @@ std::wstring basenameForDisplay(
         return path;
     }
 }
+
+std::wstring formatNewsDate(
+    const std::wstring& iso)
+{
+    if (iso.length() < 16)
+        return iso;
+
+    try
+    {
+        const int year = std::stoi(iso.substr(0, 4));
+        const int month = std::stoi(iso.substr(5, 2));
+        const int day = std::stoi(iso.substr(8, 2));
+        int hour = std::stoi(iso.substr(11, 2));
+        const int minute = std::stoi(iso.substr(14, 2));
+
+        const bool pm = hour >= 12;
+        int displayHour = hour % 12;
+
+        if (displayHour == 0)
+            displayHour = 12;
+
+        wchar_t buffer[64]{};
+
+        swprintf(
+            buffer,
+            64,
+            L"%02d:%02d %ls %02d/%02d/%04d",
+            displayHour,
+            minute,
+            pm ? L"PM" : L"AM",
+            month,
+            day,
+            year
+        );
+
+        return buffer;
+    }
+    catch (...)
+    {
+        return iso;
+    }
+}
+
 }
 
 bool MainWindow::create(
@@ -339,6 +339,9 @@ LRESULT MainWindow::handleMessage(
             )
             {
                 openNewsIndex_ = -1;
+                newsModalScrollY_ = 0;
+                newsModalMaxScroll_ = 0;
+                newsModalLinks_.clear();
 
                 InvalidateRect(
                     hwnd_,
@@ -357,11 +360,41 @@ LRESULT MainWindow::handleMessage(
             homeScrollbarDragging_ =
                 false;
 
+            newsModalScrollbarDragging_ =
+                false;
+
             return 0;
         }
 
         case WM_MOUSEWHEEL:
         {
+            if (
+                page_ == Page::Home &&
+                openNewsIndex_ >= 0
+            )
+            {
+                const int delta =
+                    GET_WHEEL_DELTA_WPARAM(
+                        wParam
+                    );
+
+                const int notches =
+                    delta / WHEEL_DELTA;
+
+                setNewsModalScroll(
+                    newsModalScrollY_ -
+                    notches * 72
+                );
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
             if (page_ == Page::Home)
             {
                 RECT client{};
@@ -406,6 +439,101 @@ LRESULT MainWindow::handleMessage(
                 openNewsIndex_ >= 0
             )
             {
+                const int x =
+                    GET_X_LPARAM(lParam);
+
+                const int contentY =
+                    GET_Y_LPARAM(lParam) -
+                    TITLEBAR_HEIGHT;
+
+                RECT client{};
+                GetClientRect(
+                    hwnd_,
+                    &client
+                );
+
+                client.bottom -=
+                    TITLEBAR_HEIGHT;
+
+                const RECT track =
+                    newsModalScrollbarTrackRect(
+                        client
+                    );
+
+                const RECT thumb =
+                    newsModalScrollbarThumbRect(
+                        client
+                    );
+
+                if (
+                    newsModalMaxScroll_ > 0 &&
+                    pointInRect(
+                        x,
+                        contentY,
+                        thumb
+                    )
+                )
+                {
+                    newsModalScrollbarDragging_ =
+                        true;
+
+                    newsModalScrollbarDragOffset_ =
+                        contentY -
+                        thumb.top;
+
+                    SetCapture(hwnd_);
+                    return 0;
+                }
+
+                if (
+                    newsModalMaxScroll_ > 0 &&
+                    pointInRect(
+                        x,
+                        contentY,
+                        track
+                    )
+                )
+                {
+                    const RECT modal =
+                        newsModalRect(client);
+
+                    const int pageAmount =
+                        std::max(
+                            120,
+                            static_cast<int>(
+                                modal.bottom -
+                                modal.top -
+                                100
+                            )
+                        );
+
+                    if (contentY < thumb.top)
+                    {
+                        setNewsModalScroll(
+                            newsModalScrollY_ -
+                            pageAmount
+                        );
+                    }
+                    else if (
+                        contentY >
+                        thumb.bottom
+                    )
+                    {
+                        setNewsModalScroll(
+                            newsModalScrollY_ +
+                            pageAmount
+                        );
+                    }
+
+                    InvalidateRect(
+                        hwnd_,
+                        nullptr,
+                        FALSE
+                    );
+
+                    return 0;
+                }
+
                 return 0;
             }
 
@@ -514,6 +642,94 @@ LRESULT MainWindow::handleMessage(
         {
             if (
                 page_ == Page::Home &&
+                openNewsIndex_ >= 0 &&
+                newsModalScrollbarDragging_
+            )
+            {
+                RECT client{};
+                GetClientRect(
+                    hwnd_,
+                    &client
+                );
+
+                client.bottom -=
+                    TITLEBAR_HEIGHT;
+
+                const RECT track =
+                    newsModalScrollbarTrackRect(
+                        client
+                    );
+
+                const RECT thumb =
+                    newsModalScrollbarThumbRect(
+                        client
+                    );
+
+                const int thumbHeight =
+                    static_cast<int>(
+                        thumb.bottom -
+                        thumb.top
+                    );
+
+                const int usableTrack =
+                    static_cast<int>(
+                        std::max<LONG>(
+                            1L,
+                            (
+                                track.bottom -
+                                track.top
+                            ) -
+                            thumbHeight
+                        )
+                    );
+
+                const int y =
+                    GET_Y_LPARAM(lParam) -
+                    TITLEBAR_HEIGHT;
+
+                int thumbTop =
+                    y -
+                    newsModalScrollbarDragOffset_;
+
+                thumbTop =
+                    std::clamp(
+                        thumbTop,
+                        static_cast<int>(
+                            track.top
+                        ),
+                        static_cast<int>(
+                            track.bottom -
+                            thumbHeight
+                        )
+                    );
+
+                const int newScroll =
+                    newsModalMaxScroll_ > 0
+                        ? (
+                            (
+                                thumbTop -
+                                track.top
+                            ) *
+                            newsModalMaxScroll_
+                          ) /
+                          usableTrack
+                        : 0;
+
+                setNewsModalScroll(
+                    newScroll
+                );
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
+            if (
+                page_ == Page::Home &&
                 homeScrollbarDragging_
             )
             {
@@ -604,6 +820,22 @@ LRESULT MainWindow::handleMessage(
 
         case WM_LBUTTONUP:
         {
+            if (newsModalScrollbarDragging_)
+            {
+                newsModalScrollbarDragging_ =
+                    false;
+
+                if (
+                    GetCapture() ==
+                    hwnd_
+                )
+                {
+                    ReleaseCapture();
+                }
+
+                return 0;
+            }
+
             if (homeScrollbarDragging_)
             {
                 homeScrollbarDragging_ =
@@ -696,6 +928,32 @@ LRESULT MainWindow::handleMessage(
                 openNewsIndex_ >= 0
             )
             {
+                for (
+                    const NewsMarkdownLink& link :
+                    newsModalLinks_
+                )
+                {
+                    if (
+                        pointInRect(
+                            x,
+                            contentY,
+                            link.rect
+                        )
+                    )
+                    {
+                        ShellExecuteW(
+                            hwnd_,
+                            L"open",
+                            link.url.c_str(),
+                            nullptr,
+                            nullptr,
+                            SW_SHOWNORMAL
+                        );
+
+                        return 0;
+                    }
+                }
+
                 if (
                     pointInRect(
                         x,
@@ -707,6 +965,9 @@ LRESULT MainWindow::handleMessage(
                 )
                 {
                     openNewsIndex_ = -1;
+                    newsModalScrollY_ = 0;
+                    newsModalMaxScroll_ = 0;
+                    newsModalLinks_.clear();
 
                     InvalidateRect(
                         hwnd_,
@@ -900,6 +1161,9 @@ LRESULT MainWindow::handleMessage(
                     )
                     {
                         openNewsIndex_ = i;
+                        newsModalScrollY_ = 0;
+                        newsModalMaxScroll_ = 0;
+                        newsModalLinks_.clear();
 
                         InvalidateRect(
                             hwnd_,
@@ -1948,6 +2212,1115 @@ RECT MainWindow::newsModalCloseRect(
     };
 }
 
+
+RECT MainWindow::newsModalScrollbarTrackRect(
+    const RECT& client) const
+{
+    const RECT modal =
+        newsModalRect(client);
+
+    return RECT{
+        modal.right - 15,
+        modal.top + 54,
+        modal.right - 7,
+        modal.bottom - 16
+    };
+}
+
+RECT MainWindow::newsModalScrollbarThumbRect(
+    const RECT& client) const
+{
+    const RECT track =
+        newsModalScrollbarTrackRect(client);
+
+    const LONG trackHeight =
+        std::max<LONG>(
+            1L,
+            track.bottom - track.top
+        );
+
+    if (newsModalMaxScroll_ <= 0)
+    {
+        return RECT{
+            track.left,
+            track.top,
+            track.right,
+            track.bottom
+        };
+    }
+
+    const RECT modal =
+        newsModalRect(client);
+
+    const LONG viewportHeight =
+        std::max<LONG>(
+            1L,
+            modal.bottom -
+            modal.top -
+            72
+        );
+
+    const LONG virtualHeight =
+        viewportHeight +
+        newsModalMaxScroll_;
+
+    LONG thumbHeight =
+        (
+            trackHeight *
+            viewportHeight
+        ) /
+        std::max<LONG>(
+            1L,
+            virtualHeight
+        );
+
+    thumbHeight =
+        std::clamp<LONG>(
+            thumbHeight,
+            44L,
+            trackHeight
+        );
+
+    const LONG usableTrack =
+        std::max<LONG>(
+            0L,
+            trackHeight -
+            thumbHeight
+        );
+
+    LONG thumbTop =
+        track.top;
+
+    if (
+        usableTrack > 0 &&
+        newsModalMaxScroll_ > 0
+    )
+    {
+        thumbTop +=
+            (
+                static_cast<LONG>(
+                    newsModalScrollY_
+                ) *
+                usableTrack
+            ) /
+            newsModalMaxScroll_;
+    }
+
+    return RECT{
+        track.left,
+        thumbTop,
+        track.right,
+        thumbTop +
+        thumbHeight
+    };
+}
+
+void MainWindow::setNewsModalScroll(
+    int value)
+{
+    newsModalScrollY_ =
+        std::clamp(
+            value,
+            0,
+            std::max(
+                0,
+                newsModalMaxScroll_
+            )
+        );
+}
+
+
+
+LONG MainWindow::renderNewsMarkdown(
+    HDC dc,
+    const std::wstring& markdown,
+    const RECT& bounds,
+    bool draw)
+{
+    struct InlineToken
+    {
+        std::wstring text;
+        bool link = false;
+        std::wstring url;
+    };
+
+    auto tokenizeInline =
+        [](const std::wstring& text)
+        {
+            std::vector<InlineToken> tokens;
+
+            auto addPlain =
+                [&tokens](const std::wstring& plain)
+                {
+                    std::wstring word;
+
+                    auto flushWord =
+                        [&]()
+                        {
+                            if (!word.empty())
+                            {
+                                tokens.push_back(
+                                    InlineToken{
+                                        word,
+                                        false,
+                                        L""
+                                    }
+                                );
+
+                                word.clear();
+                            }
+                        };
+
+                    for (wchar_t c : plain)
+                    {
+                        if (
+                            c == L' ' ||
+                            c == L'\t'
+                        )
+                        {
+                            flushWord();
+
+                            tokens.push_back(
+                                InlineToken{
+                                    L" ",
+                                    false,
+                                    L""
+                                }
+                            );
+                        }
+                        else
+                        {
+                            word += c;
+                        }
+                    }
+
+                    flushWord();
+                };
+
+            size_t cursor = 0;
+
+            while (cursor < text.size())
+            {
+                const size_t open =
+                    text.find(
+                        L'[',
+                        cursor
+                    );
+
+                if (open == std::wstring::npos)
+                {
+                    addPlain(
+                        text.substr(cursor)
+                    );
+                    break;
+                }
+
+                const size_t close =
+                    text.find(
+                        L']',
+                        open + 1
+                    );
+
+                if (
+                    close == std::wstring::npos ||
+                    close + 1 >= text.size() ||
+                    text[close + 1] != L'('
+                )
+                {
+                    addPlain(
+                        text.substr(cursor)
+                    );
+                    break;
+                }
+
+                const size_t urlClose =
+                    text.find(
+                        L')',
+                        close + 2
+                    );
+
+                if (urlClose == std::wstring::npos)
+                {
+                    addPlain(
+                        text.substr(cursor)
+                    );
+                    break;
+                }
+
+                addPlain(
+                    text.substr(
+                        cursor,
+                        open - cursor
+                    )
+                );
+
+                const std::wstring label =
+                    text.substr(
+                        open + 1,
+                        close - open - 1
+                    );
+
+                const std::wstring url =
+                    text.substr(
+                        close + 2,
+                        urlClose - close - 2
+                    );
+
+                if (
+                    !label.empty() &&
+                    (
+                        url.rfind(
+                            L"https://",
+                            0
+                        ) == 0 ||
+                        url.rfind(
+                            L"http://",
+                            0
+                        ) == 0
+                    )
+                )
+                {
+                    tokens.push_back(
+                        InlineToken{
+                            label,
+                            true,
+                            url
+                        }
+                    );
+                }
+                else
+                {
+                    addPlain(
+                        text.substr(
+                            open,
+                            urlClose - open + 1
+                        )
+                    );
+                }
+
+                cursor =
+                    urlClose + 1;
+            }
+
+            return tokens;
+        };
+
+    auto renderInline =
+        [&](const std::wstring& text,
+            HFONT font,
+            COLORREF color,
+            LONG left,
+            LONG right,
+            LONG top,
+            bool actuallyDraw) -> LONG
+        {
+            const std::vector<InlineToken> tokens =
+                tokenizeInline(text);
+
+            HFONT oldFont =
+                static_cast<HFONT>(
+                    SelectObject(
+                        dc,
+                        font
+                    )
+                );
+
+            TEXTMETRICW metrics{};
+            GetTextMetricsW(
+                dc,
+                &metrics
+            );
+
+            const LONG lineHeight =
+                std::max<LONG>(
+                    18L,
+                    metrics.tmHeight + 6
+                );
+
+            LONG x = left;
+            LONG y = top;
+
+            for (const InlineToken& token : tokens)
+            {
+                if (token.text.empty())
+                    continue;
+
+                SIZE extent{};
+
+                GetTextExtentPoint32W(
+                    dc,
+                    token.text.c_str(),
+                    static_cast<int>(
+                        token.text.size()
+                    ),
+                    &extent
+                );
+
+                if (
+                    token.text == L" " &&
+                    x == left
+                )
+                {
+                    continue;
+                }
+
+                if (
+                    x != left &&
+                    x + extent.cx > right
+                )
+                {
+                    x = left;
+                    y += lineHeight;
+
+                    if (token.text == L" ")
+                        continue;
+                }
+
+                if (actuallyDraw)
+                {
+                    SetBkMode(
+                        dc,
+                        TRANSPARENT
+                    );
+
+                    SetTextColor(
+                        dc,
+                        token.link
+                            ? CYAN
+                            : color
+                    );
+
+                    TextOutW(
+                        dc,
+                        x,
+                        y,
+                        token.text.c_str(),
+                        static_cast<int>(
+                            token.text.size()
+                        )
+                    );
+
+                    if (token.link)
+                    {
+                        const LONG underlineY =
+                            y +
+                            metrics.tmAscent +
+                            2;
+
+                        HPEN pen =
+                            CreatePen(
+                                PS_SOLID,
+                                1,
+                                CYAN
+                            );
+
+                        HPEN oldPen =
+                            static_cast<HPEN>(
+                                SelectObject(
+                                    dc,
+                                    pen
+                                )
+                            );
+
+                        MoveToEx(
+                            dc,
+                            x,
+                            underlineY,
+                            nullptr
+                        );
+
+                        LineTo(
+                            dc,
+                            x + extent.cx,
+                            underlineY
+                        );
+
+                        SelectObject(
+                            dc,
+                            oldPen
+                        );
+
+                        DeleteObject(pen);
+
+                        RECT hit{
+                            x,
+                            y -
+                            newsModalScrollY_,
+                            x + extent.cx,
+                            y +
+                            lineHeight -
+                            newsModalScrollY_
+                        };
+
+                        newsModalLinks_.push_back(
+                            NewsMarkdownLink{
+                                hit,
+                                token.url
+                            }
+                        );
+                    }
+                }
+
+                x += extent.cx;
+            }
+
+            SelectObject(
+                dc,
+                oldFont
+            );
+
+            return
+                (y - top) +
+                lineHeight;
+        };
+
+    auto splitLines =
+        [](const std::wstring& input)
+        {
+            std::vector<std::wstring> lines;
+            std::wstring current;
+
+            for (wchar_t c : input)
+            {
+                if (c == L'\r')
+                    continue;
+
+                if (c == L'\n')
+                {
+                    lines.push_back(
+                        current
+                    );
+
+                    current.clear();
+                }
+                else
+                {
+                    current += c;
+                }
+            }
+
+            lines.push_back(
+                current
+            );
+
+            return lines;
+        };
+
+    const std::vector<std::wstring> lines =
+        splitLines(markdown);
+
+    const LONG left =
+        bounds.left;
+
+    const LONG right =
+        bounds.right;
+
+    LONG y =
+        bounds.top;
+
+    bool inCode = false;
+    std::wstring codeBuffer;
+
+    auto renderCode =
+        [&](const std::wstring& code)
+        {
+            if (code.empty())
+                return;
+
+            HFONT codeFont =
+                static_cast<HFONT>(
+                    GetStockObject(
+                        ANSI_FIXED_FONT
+                    )
+                );
+
+            RECT measure{
+                left + 14,
+                y + 12,
+                right - 14,
+                y + 12
+            };
+
+            HFONT oldFont =
+                static_cast<HFONT>(
+                    SelectObject(
+                        dc,
+                        codeFont
+                    )
+                );
+
+            DrawTextW(
+                dc,
+                code.c_str(),
+                -1,
+                &measure,
+                DT_LEFT |
+                DT_WORDBREAK |
+                DT_CALCRECT |
+                DT_NOPREFIX
+            );
+
+            SelectObject(
+                dc,
+                oldFont
+            );
+
+            const LONG height =
+                std::max<LONG>(
+                    44L,
+                    measure.bottom -
+                    measure.top +
+                    24
+                );
+
+            if (draw)
+            {
+                RECT block{
+                    left,
+                    y,
+                    right,
+                    y + height
+                };
+
+                fillRectColor(
+                    dc,
+                    block,
+                    RGB(3, 8, 20)
+                );
+
+                fillRectColor(
+                    dc,
+                    RECT{
+                        block.left,
+                        block.top,
+                        block.left + 3,
+                        block.bottom
+                    },
+                    MUTED
+                );
+
+                drawTextSimple(
+                    dc,
+                    code,
+                    RECT{
+                        block.left + 14,
+                        block.top + 12,
+                        block.right - 14,
+                        block.bottom - 12
+                    },
+                    codeFont,
+                    SUCCESS,
+                    DT_LEFT |
+                    DT_WORDBREAK |
+                    DT_NOPREFIX
+                );
+            }
+
+            y +=
+                height + 12;
+        };
+
+    for (size_t i = 0; i < lines.size(); ++i)
+    {
+        const std::wstring& raw =
+            lines[i];
+
+        /*
+            Custom grouped-list syntax:
+
+                -- Hardware
+                - CPU
+                - GPU
+
+                -- Software
+                Minecraft
+                Forge
+
+            A line beginning with "-- " is the group heading.
+            Every following nonblank line becomes an item until either:
+              1. a blank line, or
+              2. another "-- " heading.
+
+            Item lines may optionally begin with "- ".
+        */
+        if (
+            !inCode &&
+            raw.rfind(
+                L"-- ",
+                0
+            ) == 0
+        )
+        {
+            const std::wstring groupTitle =
+                raw.substr(3);
+
+            // Group heading
+            const LONG headingHeight =
+                renderInline(
+                    groupTitle,
+                    fontBrand_,
+                    CYAN,
+                    left,
+                    right,
+                    y,
+                    draw
+                );
+
+            y +=
+                headingHeight + 4;
+
+            // Thin accent divider under the group title.
+            if (draw)
+            {
+                fillRectColor(
+                    dc,
+                    RECT{
+                        left,
+                        y,
+                        right,
+                        y + 2
+                    },
+                    CYAN
+                );
+            }
+
+            y += 10;
+
+            // Consume following item lines.
+            size_t itemIndex =
+                i + 1;
+
+            for (
+                ;
+                itemIndex < lines.size();
+                ++itemIndex
+            )
+            {
+                const std::wstring& itemRaw =
+                    lines[itemIndex];
+
+                if (itemRaw.empty())
+                    break;
+
+                if (
+                    itemRaw.rfind(
+                        L"-- ",
+                        0
+                    ) == 0
+                )
+                {
+                    break;
+                }
+
+                std::wstring itemText =
+                    itemRaw;
+
+                if (
+                    itemText.rfind(
+                        L"- ",
+                        0
+                    ) == 0
+                )
+                {
+                    itemText =
+                        itemText.substr(2);
+                }
+
+                // Treat a bare "-" or "- " as an empty spacer item.
+                if (
+                    itemText == L"-" ||
+                    itemText == L" "
+                )
+                {
+                    itemText.clear();
+                }
+
+                if (!itemText.empty())
+                {
+                    HFONT bulletFont =
+                        fontNormal_;
+
+                    HFONT oldFont =
+                        static_cast<HFONT>(
+                            SelectObject(
+                                dc,
+                                bulletFont
+                            )
+                        );
+
+                    TEXTMETRICW metrics{};
+                    GetTextMetricsW(
+                        dc,
+                        &metrics
+                    );
+
+                    SelectObject(
+                        dc,
+                        oldFont
+                    );
+
+                    const LONG lineHeight =
+                        std::max<LONG>(
+                            18L,
+                            metrics.tmHeight + 6
+                        );
+
+                    const LONG bulletX =
+                        left + 10;
+
+                    const LONG textLeft =
+                        left + 32;
+
+                    const LONG itemHeight =
+                        renderInline(
+                            itemText,
+                            bulletFont,
+                            TEXT,
+                            textLeft,
+                            right,
+                            y,
+                            draw
+                        );
+
+                    if (draw)
+                    {
+                        drawTextSimple(
+                            dc,
+                            L"•",
+                            RECT{
+                                bulletX,
+                                y,
+                                textLeft - 6,
+                                y + lineHeight
+                            },
+                            bulletFont,
+                            CYAN,
+                            DT_LEFT |
+                            DT_SINGLELINE |
+                            DT_VCENTER
+                        );
+                    }
+
+                    y +=
+                        std::max<LONG>(
+                            lineHeight,
+                            itemHeight
+                        ) +
+                        5;
+                }
+                else
+                {
+                    y += 8;
+                }
+            }
+
+            /*
+                If the loop stopped because it found another "-- " heading,
+                leave i pointing at the item before it so the outer loop will
+                process the next heading normally.
+            */
+            if (
+                itemIndex > i + 1
+            )
+            {
+                i =
+                    itemIndex - 1;
+            }
+
+            y += 6;
+            continue;
+        }
+
+        if (
+            raw.rfind(
+                L"```",
+                0
+            ) == 0
+        )
+        {
+            if (inCode)
+            {
+                renderCode(
+                    codeBuffer
+                );
+
+                codeBuffer.clear();
+                inCode = false;
+            }
+            else
+            {
+                inCode = true;
+            }
+
+            continue;
+        }
+
+        if (inCode)
+        {
+            if (!codeBuffer.empty())
+                codeBuffer += L"\n";
+
+            codeBuffer += raw;
+            continue;
+        }
+
+        if (raw.empty())
+        {
+            y += 12;
+            continue;
+        }
+
+        int headingLevel = 0;
+        std::wstring content = raw;
+
+        if (
+            raw.rfind(
+                L"### ",
+                0
+            ) == 0
+        )
+        {
+            headingLevel = 3;
+            content = raw.substr(4);
+        }
+        else if (
+            raw.rfind(
+                L"## ",
+                0
+            ) == 0
+        )
+        {
+            headingLevel = 2;
+            content = raw.substr(3);
+        }
+        else if (
+            raw.rfind(
+                L"# ",
+                0
+            ) == 0
+        )
+        {
+            headingLevel = 1;
+            content = raw.substr(2);
+        }
+
+        if (headingLevel > 0)
+        {
+            HFONT headingFont =
+                headingLevel == 1
+                    ? fontHero_
+                    : (
+                        headingLevel == 2
+                            ? fontTitle_
+                            : fontBrand_
+                    );
+
+            const LONG height =
+                renderInline(
+                    content,
+                    headingFont,
+                    TEXT,
+                    left,
+                    right,
+                    y,
+                    draw
+                );
+
+            y +=
+                height + 8;
+
+            continue;
+        }
+
+        if (
+            raw.rfind(
+                L"- ",
+                0
+            ) == 0
+        )
+        {
+            const std::wstring listText =
+                raw.substr(2);
+
+            HFONT bulletFont =
+                fontNormal_;
+
+            HFONT oldFont =
+                static_cast<HFONT>(
+                    SelectObject(
+                        dc,
+                        bulletFont
+                    )
+                );
+
+            TEXTMETRICW metrics{};
+            GetTextMetricsW(
+                dc,
+                &metrics
+            );
+
+            SelectObject(
+                dc,
+                oldFont
+            );
+
+            const LONG lineHeight =
+                std::max<LONG>(
+                    18L,
+                    metrics.tmHeight + 6
+                );
+
+            const LONG bulletX =
+                left + 2;
+
+            const LONG textLeft =
+                left + 22;
+
+            const LONG textHeight =
+                renderInline(
+                    listText,
+                    bulletFont,
+                    TEXT,
+                    textLeft,
+                    right,
+                    y,
+                    draw
+                );
+
+            if (draw)
+            {
+                /*
+                    Discord-style unordered list marker.
+                    Use a real Unicode bullet instead of rendering the source '-'.
+                */
+                drawTextSimple(
+                    dc,
+                    L"•",
+                    RECT{
+                        bulletX,
+                        y,
+                        textLeft - 4,
+                        y + lineHeight
+                    },
+                    bulletFont,
+                    CYAN,
+                    DT_LEFT |
+                    DT_SINGLELINE |
+                    DT_VCENTER
+                );
+            }
+
+            y +=
+                std::max<LONG>(
+                    lineHeight,
+                    textHeight
+                ) +
+                6;
+
+            continue;
+        }
+
+        if (
+            raw.rfind(
+                L"> ",
+                0
+            ) == 0 ||
+            raw == L">"
+        )
+        {
+            const std::wstring quoteText =
+                raw.size() > 2
+                    ? raw.substr(2)
+                    : L"";
+
+            const LONG textHeight =
+                renderInline(
+                    quoteText,
+                    fontNormal_,
+                    MUTED,
+                    left + 18,
+                    right - 12,
+                    y + 10,
+                    false
+                );
+
+            const LONG blockHeight =
+                std::max<LONG>(
+                    40L,
+                    textHeight + 20
+                );
+
+            if (draw)
+            {
+                fillRectColor(
+                    dc,
+                    RECT{
+                        left,
+                        y,
+                        right,
+                        y + blockHeight
+                    },
+                    PANEL
+                );
+
+                fillRectColor(
+                    dc,
+                    RECT{
+                        left,
+                        y,
+                        left + 4,
+                        y + blockHeight
+                    },
+                    CYAN
+                );
+
+                renderInline(
+                    quoteText,
+                    fontNormal_,
+                    MUTED,
+                    left + 18,
+                    right - 12,
+                    y + 10,
+                    true
+                );
+            }
+
+            y +=
+                blockHeight + 10;
+
+            continue;
+        }
+
+        const LONG paragraphHeight =
+            renderInline(
+                raw,
+                fontNormal_,
+                TEXT,
+                left,
+                right,
+                y,
+                draw
+            );
+
+        y +=
+            paragraphHeight + 8;
+    }
+
+    if (inCode)
+    {
+        renderCode(
+            codeBuffer
+        );
+    }
+
+    return
+        std::max<LONG>(
+            0L,
+            y - bounds.top
+        );
+}
+
+
 void MainWindow::paintNewsModal(
     HDC dc,
     const RECT& client)
@@ -1966,7 +3339,6 @@ void MainWindow::paintNewsModal(
     const NewsItem& item =
         news_[openNewsIndex_];
 
-    // Darken the full content area behind the article.
     RECT overlay{
         220,
         0,
@@ -1981,9 +3353,7 @@ void MainWindow::paintNewsModal(
     );
 
     const RECT modal =
-        newsModalRect(
-            client
-        );
+        newsModalRect(client);
 
     fillRectColor(
         dc,
@@ -2004,30 +3374,22 @@ void MainWindow::paintNewsModal(
             : CYAN
     );
 
-    const RECT close =
-        newsModalCloseRect(
-            client
-        );
+    RECT viewport{
+        modal.left + 8,
+        modal.top + 10,
+        modal.right - 22,
+        modal.bottom - 12
+    };
 
-    fillRectColor(
-        dc,
-        close,
-        ACCENT
-    );
-
-    drawTextSimple(
-        dc,
-        L"×",
-        close,
-        fontNormal_,
-        TEXT_DARK,
-        DT_CENTER |
-        DT_VCENTER |
-        DT_SINGLELINE
-    );
+    const std::wstring body =
+        item.body.empty()
+            ? item.summary
+            : item.body;
 
     LONG contentTop =
         modal.top + 22;
+
+    bool hasArtwork = false;
 
     if (!item.imageUrl.empty())
     {
@@ -2036,31 +3398,97 @@ void MainWindow::paintNewsModal(
             item.imageUrl;
 
         auto it =
-            imageCache_.find(
-                imageKey
-            );
+            imageCache_.find(imageKey);
 
-        if (
+        hasArtwork =
             it != imageCache_.end() &&
-            it->second
-        )
-        {
-            RECT hero{
-                modal.left + 22,
-                modal.top + 22,
-                modal.right - 70,
-                modal.top + 190
-            };
+            it->second;
+    }
 
-            drawBitmapCover(
-                dc,
-                it->second,
-                hero
-            );
+    if (hasArtwork)
+        contentTop = modal.top + 300;
 
-            contentTop =
-                hero.bottom + 18;
-        }
+    const LONG bodyTop =
+        contentTop + 112;
+
+    RECT markdownBounds{
+        modal.left + 24,
+        bodyTop,
+        modal.right - 42,
+        bodyTop + 100000
+    };
+
+    const LONG markdownHeight =
+        renderNewsMarkdown(
+            dc,
+            body,
+            markdownBounds,
+            false
+        );
+
+    const LONG virtualBottom =
+        bodyTop +
+        markdownHeight +
+        34;
+
+    newsModalMaxScroll_ =
+        std::max(
+            0,
+            static_cast<int>(
+                virtualBottom -
+                viewport.bottom
+            )
+        );
+
+    setNewsModalScroll(
+        newsModalScrollY_
+    );
+
+    const int saved =
+        SaveDC(dc);
+
+    IntersectClipRect(
+        dc,
+        viewport.left,
+        viewport.top,
+        viewport.right,
+        viewport.bottom
+    );
+
+    OffsetViewportOrgEx(
+        dc,
+        0,
+        -newsModalScrollY_,
+        nullptr
+    );
+
+    contentTop =
+        modal.top + 22;
+
+    if (hasArtwork)
+    {
+        const std::wstring imageKey =
+            L"news:" +
+            item.imageUrl;
+
+        auto it =
+            imageCache_.find(imageKey);
+
+        RECT hero{
+            modal.left + 48,
+            modal.top + 22,
+            modal.right - 48,
+            modal.top + 282
+        };
+
+        drawBitmapFit(
+            dc,
+            it->second,
+            hero
+        );
+
+        contentTop =
+            hero.bottom + 18;
     }
 
     drawTextSimple(
@@ -2071,7 +3499,7 @@ void MainWindow::paintNewsModal(
         RECT{
             modal.left + 24,
             contentTop,
-            modal.right - 24,
+            modal.right - 42,
             contentTop + 23
         },
         fontMeta_,
@@ -2089,7 +3517,7 @@ void MainWindow::paintNewsModal(
         RECT{
             modal.left + 24,
             contentTop + 29,
-            modal.right - 24,
+            modal.right - 42,
             contentTop + 72
         },
         fontTitle_,
@@ -2101,11 +3529,13 @@ void MainWindow::paintNewsModal(
 
     drawTextSimple(
         dc,
-        formatNewsDate(item.published),
+        formatNewsDate(
+            item.published
+        ),
         RECT{
             modal.left + 24,
             contentTop + 76,
-            modal.right - 24,
+            modal.right - 42,
             contentTop + 98
         },
         fontSmall_,
@@ -2115,26 +3545,73 @@ void MainWindow::paintNewsModal(
         DT_END_ELLIPSIS
     );
 
-    const std::wstring body =
-        item.body.empty()
-            ? item.summary
-            : item.body;
+    newsModalLinks_.clear();
 
-    drawTextSimple(
+    renderNewsMarkdown(
         dc,
         body,
         RECT{
             modal.left + 24,
             contentTop + 112,
-            modal.right - 24,
-            modal.bottom - 26
+            modal.right - 42,
+            virtualBottom
         },
+        true
+    );
+
+    RestoreDC(
+        dc,
+        saved
+    );
+
+    if (newsModalMaxScroll_ > 0)
+    {
+        const RECT track =
+            newsModalScrollbarTrackRect(
+                client
+            );
+
+        const RECT thumb =
+            newsModalScrollbarThumbRect(
+                client
+            );
+
+        fillRectColor(
+            dc,
+            track,
+            BORDER
+        );
+
+        fillRectColor(
+            dc,
+            thumb,
+            newsModalScrollbarDragging_
+                ? CYAN
+                : MUTED
+        );
+    }
+
+    const RECT close =
+        newsModalCloseRect(client);
+
+    fillRectColor(
+        dc,
+        close,
+        ACCENT
+    );
+
+    drawTextSimple(
+        dc,
+        L"×",
+        close,
         fontNormal_,
-        TEXT,
-        DT_LEFT |
-        DT_WORDBREAK
+        TEXT_DARK,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
     );
 }
+
 
 void MainWindow::paintHome(
     HDC dc,
@@ -2513,11 +3990,11 @@ void MainWindow::paintHome(
                     RECT thumb{
                         card.left + 16,
                         card.top + 18,
-                        card.left + 108,
-                        card.top + 92
+                        card.left + 104,
+                        card.top + 106
                     };
 
-                    drawBitmapCover(
+                    drawBitmapFit(
                         dc,
                         it->second,
                         thumb
@@ -3162,6 +4639,154 @@ void MainWindow::drawBitmapCover(
     DeleteDC(source);
 }
 
+void MainWindow::drawBitmapFit(
+    HDC dc,
+    HBITMAP bitmap,
+    const RECT& target)
+{
+    if (!bitmap)
+        return;
+
+    BITMAP bm{};
+
+    if (
+        GetObject(
+            bitmap,
+            sizeof(bm),
+            &bm
+        ) == 0 ||
+        bm.bmWidth <= 0 ||
+        bm.bmHeight <= 0
+    )
+    {
+        return;
+    }
+
+    const LONG boxWidth =
+        target.right -
+        target.left;
+
+    const LONG boxHeight =
+        target.bottom -
+        target.top;
+
+    if (
+        boxWidth <= 0 ||
+        boxHeight <= 0
+    )
+    {
+        return;
+    }
+
+    /*
+        TRUE ASPECT-CONTAIN.
+
+        The HBITMAP already retains the source image's real proportions.
+        We calculate one uniform scale factor and apply it to BOTH axes.
+
+        No cropping.
+        No forced width.
+        No forced height.
+        No aspect-ratio changes.
+    */
+    const double scaleX =
+        static_cast<double>(boxWidth) /
+        static_cast<double>(bm.bmWidth);
+
+    const double scaleY =
+        static_cast<double>(boxHeight) /
+        static_cast<double>(bm.bmHeight);
+
+    const double scale =
+        scaleX < scaleY
+            ? scaleX
+            : scaleY;
+
+    LONG drawWidth =
+        static_cast<LONG>(
+            static_cast<double>(bm.bmWidth) *
+            scale
+        );
+
+    LONG drawHeight =
+        static_cast<LONG>(
+            static_cast<double>(bm.bmHeight) *
+            scale
+        );
+
+    drawWidth =
+        std::max<LONG>(
+            1L,
+            drawWidth
+        );
+
+    drawHeight =
+        std::max<LONG>(
+            1L,
+            drawHeight
+        );
+
+    const LONG drawX =
+        target.left +
+        (
+            boxWidth -
+            drawWidth
+        ) / 2;
+
+    const LONG drawY =
+        target.top +
+        (
+            boxHeight -
+            drawHeight
+        ) / 2;
+
+    HDC source =
+        CreateCompatibleDC(dc);
+
+    if (!source)
+        return;
+
+    HBITMAP old =
+        static_cast<HBITMAP>(
+            SelectObject(
+                source,
+                bitmap
+            )
+        );
+
+    BLENDFUNCTION blend{};
+    blend.BlendOp = AC_SRC_OVER;
+    blend.BlendFlags = 0;
+    blend.SourceConstantAlpha = 255;
+    blend.AlphaFormat = AC_SRC_ALPHA;
+
+    SetStretchBltMode(
+        dc,
+        HALFTONE
+    );
+
+    AlphaBlend(
+        dc,
+        drawX,
+        drawY,
+        drawWidth,
+        drawHeight,
+        source,
+        0,
+        0,
+        bm.bmWidth,
+        bm.bmHeight,
+        blend
+    );
+
+    SelectObject(
+        source,
+        old
+    );
+
+    DeleteDC(source);
+}
+
 void MainWindow::paintPackList(
     HDC dc,
     const RECT& client)
@@ -3739,10 +5364,10 @@ void MainWindow::ensureNewsArtwork()
             item.imageUrl;
 
         HBITMAP bitmap =
-            ImageLoader::loadFromUrl(
+            ImageLoader::loadFromUrlPreserveAspect(
                 item.imageUrl,
-                900,
-                420
+                1200,
+                900
             );
 
         if (bitmap)
@@ -3759,6 +5384,8 @@ void MainWindow::refreshNews()
         L"Loading news...";
 
     openNewsIndex_ = -1;
+    newsModalScrollY_ = 0;
+    newsModalMaxScroll_ = 0;
 
     InvalidateRect(
         hwnd_,
