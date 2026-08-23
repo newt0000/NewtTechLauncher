@@ -1,6 +1,5 @@
 
 #include <windows.h>
-#include "InstallerResources.h"
 #include <windowsx.h>
 #include <winhttp.h>
 #include <shlobj.h>
@@ -8,6 +7,7 @@
 #include <shellapi.h>
 #include <bcrypt.h>
 #include <dwmapi.h>
+#include <tlhelp32.h>
 
 #include <stdio.h>
 #include <wchar.h>
@@ -58,6 +58,10 @@ static InstallState g_state = {0};
 static CRITICAL_SECTION g_lock;
 static BOOL g_desktopShortcut = TRUE;
 static BOOL g_launchAfter = TRUE;
+static BOOL g_installed = FALSE;
+static BOOL g_updateAvailable = FALSE;
+static wchar_t g_installedVersion[64] = L"";
+static wchar_t g_availableVersion[64] = L"";
 
 static const COLORREF BG = RGB(5,10,24);
 static const COLORREF PANEL = RGB(8,17,38);
@@ -123,6 +127,87 @@ static BOOL get_install_dir(wchar_t *out, DWORD count) {
     _snwprintf(out, count, L"%s\\Programs\\NewtTech Launcher", local);
     out[count - 1] = L'\0';
     return TRUE;
+}
+
+static int compare_version(const wchar_t *a, const wchar_t *b) {
+    int ai[4] = {0,0,0,0};
+    int bi[4] = {0,0,0,0};
+
+    swscanf(a ? a : L"", L"%d.%d.%d.%d", &ai[0], &ai[1], &ai[2], &ai[3]);
+    swscanf(b ? b : L"", L"%d.%d.%d.%d", &bi[0], &bi[1], &bi[2], &bi[3]);
+
+    for (int i = 0; i < 4; ++i) {
+        if (ai[i] < bi[i]) return -1;
+        if (ai[i] > bi[i]) return 1;
+    }
+
+    return 0;
+}
+
+static BOOL read_installed_version(void) {
+    HKEY key = NULL;
+    DWORD type = 0;
+    DWORD size = sizeof(g_installedVersion);
+
+    if (RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\NewtTech Launcher",
+            0,
+            KEY_READ,
+            &key) != ERROR_SUCCESS)
+    {
+        return FALSE;
+    }
+
+    LONG result = RegQueryValueExW(
+        key,
+        L"DisplayVersion",
+        NULL,
+        &type,
+        (LPBYTE)g_installedVersion,
+        &size
+    );
+
+    RegCloseKey(key);
+
+    if (result != ERROR_SUCCESS || type != REG_SZ) {
+        g_installedVersion[0] = L'\0';
+        return FALSE;
+    }
+
+    g_installedVersion[
+        (sizeof(g_installedVersion) / sizeof(wchar_t)) - 1
+    ] = L'\0';
+
+    return TRUE;
+}
+
+static BOOL process_running(const wchar_t *exeName) {
+    HANDLE snapshot = CreateToolhelp32Snapshot(
+        TH32CS_SNAPPROCESS,
+        0
+    );
+
+    if (snapshot == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    PROCESSENTRY32W entry;
+    ZeroMemory(&entry, sizeof(entry));
+    entry.dwSize = sizeof(entry);
+
+    BOOL found = FALSE;
+
+    if (Process32FirstW(snapshot, &entry)) {
+        do {
+            if (_wcsicmp(entry.szExeFile, exeName) == 0) {
+                found = TRUE;
+                break;
+            }
+        } while (Process32NextW(snapshot, &entry));
+    }
+
+    CloseHandle(snapshot);
+    return found;
 }
 
 static BOOL crack_url(const wchar_t *url, wchar_t *host, DWORD hostLen,
@@ -742,6 +827,47 @@ static BOOL parse_manifest(const char *json, Manifest *m) {
     return count > 0;
 }
 
+static void preflight_install_mode(void) {
+    g_installed = read_installed_version();
+
+    BYTE *bytes = NULL;
+    DWORD size = 0;
+    Manifest manifest;
+
+    if (http_get_memory(MANIFEST_URL, &bytes, &size)) {
+        if (parse_manifest((const char*)bytes, &manifest)) {
+            wcsncpy(
+                g_availableVersion,
+                manifest.version,
+                (sizeof(g_availableVersion) / sizeof(wchar_t)) - 1
+            );
+
+            g_availableVersion[
+                (sizeof(g_availableVersion) / sizeof(wchar_t)) - 1
+            ] = L'\0';
+
+            if (g_installed) {
+                g_updateAvailable =
+                    compare_version(
+                        g_installedVersion,
+                        g_availableVersion
+                    ) < 0;
+            }
+        }
+
+        if (bytes)
+            HeapFree(GetProcessHeap(), 0, bytes);
+    }
+
+    if (g_installed && g_updateAvailable) {
+        set_state(0, L"Update available.");
+    } else if (g_installed) {
+        set_state(0, L"Launcher is already installed. Repair/reinstall is available.");
+    } else {
+        set_state(0, L"Ready to install.");
+    }
+}
+
 static BOOL sha256_file(const wchar_t *path, wchar_t out[65]) {
     BCRYPT_ALG_HANDLE alg = NULL;
     BCRYPT_HASH_HANDLE hash = NULL;
@@ -979,6 +1105,17 @@ static DWORD WINAPI install_thread(LPVOID unused) {
     DWORD manifestSize = 0;
     Manifest manifest;
     wchar_t install[MAX_PATH];
+
+    if (g_installed && process_running(L"NewtTechLauncher.exe")) {
+        MessageBoxW(
+            g_hwnd,
+            L"NewtTech Launcher is currently running.\n\nClose the launcher, then click the install/update button again.",
+            L"NewtTech Launcher is running",
+            MB_OK | MB_ICONINFORMATION
+        );
+        set_state(0, L"Close NewtTech Launcher before updating.");
+        return 1;
+    }
 
     EnterCriticalSection(&g_lock);
     g_state.active = TRUE;
@@ -1220,13 +1357,41 @@ static void paint_installer(HDC dc, RECT client) {
     draw_text(mem, L"×", close_rect(client), g_font, DARKTEXT,
         DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
-    draw_text(mem, L"Install NewtTech Launcher",
+    draw_text(mem,
+        g_installed
+            ? (g_updateAvailable
+                ? L"Update NewtTech Launcher"
+                : L"Repair NewtTech Launcher")
+            : L"Install NewtTech Launcher",
         (RECT){70,82,650,126}, g_title, TEXT,
         DT_LEFT|DT_SINGLELINE);
 
-    draw_text(mem, L"Installs the launcher and everything it needs to run.",
+    {
+        wchar_t subtitle[512];
+
+        if (g_installed && g_availableVersion[0]) {
+            _snwprintf(
+                subtitle,
+                512,
+                g_updateAvailable
+                    ? L"Installed %s  •  Available %s"
+                    : L"Installed %s  •  Current online version %s",
+                g_installedVersion,
+                g_availableVersion
+            );
+        } else {
+            wcsncpy(
+                subtitle,
+                L"Installs the launcher and everything it needs to run.",
+                511
+            );
+            subtitle[511] = L'\0';
+        }
+
+        draw_text(mem, subtitle,
         (RECT){72,132,650,160}, g_font, MUTED,
         DT_LEFT|DT_SINGLELINE);
+    }
 
     wchar_t install[MAX_PATH];
     get_install_dir(install, MAX_PATH);
@@ -1266,7 +1431,13 @@ static void paint_installer(HDC dc, RECT client) {
     fill_rect(mem, button, state.active ? CARD : ACCENT);
 
     draw_text(mem,
-        state.active ? L"Installing..." : (state.complete ? L"Installed" : L"Install"),
+        state.active
+            ? (g_updateAvailable ? L"Updating..." : L"Installing...")
+            : (state.complete
+                ? (g_updateAvailable ? L"Updated" : L"Installed")
+                : (g_installed
+                    ? (g_updateAvailable ? L"Update" : L"Repair")
+                    : L"Install")),
         button, g_font, state.active ? MUTED : DARKTEXT,
         DT_CENTER|DT_VCENTER|DT_SINGLELINE);
 
@@ -1444,15 +1615,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
     wc.lpfnWndProc = wnd_proc;
     wc.lpszClassName = L"NewtTechStandaloneInstaller";
     wc.hCursor = LoadCursorW(NULL,IDC_ARROW);
-    wc.hIcon = LoadIconW(
-    inst,
-    MAKEINTRESOURCEW(IDI_INSTALLER_ICON)
-);
 
-    wc.hIconSm = LoadIconW(
-        inst,
-        MAKEINTRESOURCEW(IDI_INSTALLER_ICON)
-    );
     if (!RegisterClassExW(&wc))
         return 1;
 
@@ -1468,6 +1631,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show) {
 
     if (!g_hwnd)
         return 1;
+
+    preflight_install_mode();
 
     ShowWindow(g_hwnd,show);
     UpdateWindow(g_hwnd);
