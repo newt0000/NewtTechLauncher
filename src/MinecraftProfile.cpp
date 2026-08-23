@@ -7,8 +7,11 @@
 #include <shlobj.h>
 #include <shellapi.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <thread>
+#include <chrono>
 #include <vector>
 
 namespace
@@ -109,19 +112,9 @@ bool MinecraftProfile::createOrUpdate(
     if (!std::filesystem::exists(expectedVersion))
         return false;
 
-    const std::wstring profileFile =
-        launcherProfilesFile(
-            minecraftRoot
-        );
-
-    if (profileFile.empty())
-        return false;
-
     const std::wstring gameDir =
         (
-            std::filesystem::path(
-                instanceRoot
-            ) /
+            std::filesystem::path(instanceRoot) /
             manifest.id
         ).wstring();
 
@@ -138,30 +131,69 @@ bool MinecraftProfile::createOrUpdate(
         manifest.name;
 
     const std::wstring icon =
-        iconFromUrl(
-            iconUrl
-        );
+        iconFromUrl(iconUrl);
 
-    return writeWithPowerShell(
-        profileFile,
-        profileKey,
-        name,
-        gameDir,
-        version.versionId,
-        icon,
-        memoryMb
-    );
+    const int adjustedMemory =
+        safeMemoryMb(memoryMb);
+
+    const std::vector<std::wstring> files =
+        launcherProfileFiles(minecraftRoot);
+
+    bool wroteAtLeastOne = false;
+
+    for (const std::wstring& profileFile : files)
+    {
+        // Retry a few times because older launcher builds and slower Windows
+        // systems can briefly hold or rewrite launcher_profiles*.json.
+        for (int attempt = 0; attempt < 3; ++attempt)
+        {
+            if (writeWithPowerShell(
+                    profileFile,
+                    profileKey,
+                    name,
+                    gameDir,
+                    version.versionId,
+                    icon,
+                    adjustedMemory))
+            {
+                wroteAtLeastOne = true;
+                break;
+            }
+
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(
+                    250 * (attempt + 1)
+                )
+            );
+        }
+    }
+
+    return wroteAtLeastOne;
 }
 
-std::wstring MinecraftProfile::launcherProfilesFile(
+std::vector<std::wstring>
+MinecraftProfile::launcherProfileFiles(
     const std::wstring& minecraftRoot)
 {
-    // The user's official Java launcher is using this exact file.
+    std::vector<std::wstring> result;
+
     const std::filesystem::path classic =
         std::filesystem::path(minecraftRoot) /
         L"launcher_profiles.json";
 
-    if (!std::filesystem::exists(classic))
+    const std::filesystem::path store =
+        std::filesystem::path(minecraftRoot) /
+        L"launcher_profiles_microsoft_store.json";
+
+    if (std::filesystem::exists(classic))
+        result.push_back(classic.wstring());
+
+    if (std::filesystem::exists(store))
+        result.push_back(store.wstring());
+
+    // Older/alternate launcher installs normally use launcher_profiles.json.
+    // Create it if neither known profile file exists.
+    if (result.empty())
     {
         std::ofstream output(
             classic,
@@ -177,27 +209,72 @@ std::wstring MinecraftProfile::launcherProfilesFile(
             "  \"settings\": {},\n"
             "  \"version\": 3\n"
             "}\n";
-    }
 
-    // Keep a last-known-good backup before every profile mutation.
-    try
-    {
-        const std::filesystem::path backup =
-            std::filesystem::path(minecraftRoot) /
-            L"launcher_profiles.newttech-backup.json";
-
-        std::filesystem::copy_file(
-            classic,
-            backup,
-            std::filesystem::copy_options::overwrite_existing
+        result.push_back(
+            classic.wstring()
         );
     }
-    catch (...)
+
+    // Back up every profile file we intend to touch.
+    for (const std::wstring& file : result)
     {
-        // Backup failure should not prevent profile creation.
+        try
+        {
+            const std::filesystem::path source(file);
+            const std::filesystem::path backup =
+                source.parent_path() /
+                (
+                    source.stem().wstring() +
+                    L".newttech-backup.json"
+                );
+
+            std::filesystem::copy_file(
+                source,
+                backup,
+                std::filesystem::copy_options::overwrite_existing
+            );
+        }
+        catch (...)
+        {
+        }
     }
 
-    return classic.wstring();
+    return result;
+}
+
+int MinecraftProfile::safeMemoryMb(
+    int requestedMb)
+{
+    MEMORYSTATUSEX memory{};
+    memory.dwLength = sizeof(memory);
+
+    if (!GlobalMemoryStatusEx(&memory))
+        return std::clamp(
+            requestedMb,
+            2048,
+            16384
+        );
+
+    const unsigned long long totalMb =
+        memory.ullTotalPhys /
+        (1024ull * 1024ull);
+
+    int maximum = 16384;
+
+    if (totalMb <= 10ull * 1024ull)
+        maximum = 4096;
+    else if (totalMb <= 16ull * 1024ull)
+        maximum = 6144;
+    else if (totalMb <= 24ull * 1024ull)
+        maximum = 8192;
+    else
+        maximum = 12288;
+
+    return std::clamp(
+        requestedMb,
+        2048,
+        maximum
+    );
 }
 
 std::wstring MinecraftProfile::iconFromUrl(
@@ -211,9 +288,7 @@ std::wstring MinecraftProfile::iconFromUrl(
     try
     {
         bytes =
-            HttpClient::getUtf8(
-                iconUrl
-            );
+            HttpClient::getUtf8(iconUrl);
     }
     catch (...)
     {
@@ -226,14 +301,9 @@ std::wstring MinecraftProfile::iconFromUrl(
     DWORD outputLength = 0;
 
     if (!CryptBinaryToStringA(
-            reinterpret_cast<const BYTE*>(
-                bytes.data()
-            ),
-            static_cast<DWORD>(
-                bytes.size()
-            ),
-            CRYPT_STRING_BASE64 |
-            CRYPT_STRING_NOCRLF,
+            reinterpret_cast<const BYTE*>(bytes.data()),
+            static_cast<DWORD>(bytes.size()),
+            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
             nullptr,
             &outputLength))
     {
@@ -246,14 +316,9 @@ std::wstring MinecraftProfile::iconFromUrl(
     );
 
     if (!CryptBinaryToStringA(
-            reinterpret_cast<const BYTE*>(
-                bytes.data()
-            ),
-            static_cast<DWORD>(
-                bytes.size()
-            ),
-            CRYPT_STRING_BASE64 |
-            CRYPT_STRING_NOCRLF,
+            reinterpret_cast<const BYTE*>(bytes.data()),
+            static_cast<DWORD>(bytes.size()),
+            CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF,
             encoded.data(),
             &outputLength))
     {
@@ -273,9 +338,7 @@ std::wstring MinecraftProfile::iconFromUrl(
             CP_UTF8,
             0,
             encoded.data(),
-            static_cast<int>(
-                encoded.size()
-            ),
+            static_cast<int>(encoded.size()),
             nullptr,
             0
         );
@@ -289,9 +352,7 @@ std::wstring MinecraftProfile::iconFromUrl(
         CP_UTF8,
         0,
         encoded.data(),
-        static_cast<int>(
-            encoded.size()
-        ),
+        static_cast<int>(encoded.size()),
         wide.data(),
         wideLength
     );
@@ -326,14 +387,24 @@ bool MinecraftProfile::writeWithPowerShell(
     const std::wstring& icon,
     int memoryMb)
 {
+    const std::filesystem::path path(profileFile);
     const std::filesystem::path minecraftRoot =
-        std::filesystem::path(profileFile).parent_path();
+        path.parent_path();
 
     const std::filesystem::path scriptPath =
-        minecraftRoot / L"newttech-profile.ps1";
+        minecraftRoot /
+        L"newttech-profile.ps1";
 
     const std::filesystem::path resultPath =
-        minecraftRoot / L"newttech-profile-result.txt";
+        minecraftRoot /
+        L"newttech-profile-result.txt";
+
+    const std::filesystem::path tempPath =
+        path.parent_path() /
+        (
+            path.filename().wstring() +
+            L".newttech.tmp"
+        );
 
     std::wofstream script(
         scriptPath,
@@ -346,17 +417,19 @@ bool MinecraftProfile::writeWithPowerShell(
     script <<
         L"$ErrorActionPreference='Stop'\n"
         L"$path='" << escapePs(profileFile) << L"'\n"
+        L"$tmp='" << escapePs(tempPath.wstring()) << L"'\n"
         L"$result='" << escapePs(resultPath.wstring()) << L"'\n"
         L"$key='" << escapePs(profileKey) << L"'\n"
         L"$raw=Get-Content -Raw -LiteralPath $path\n"
-        L"if([string]::IsNullOrWhiteSpace($raw)){throw 'launcher_profiles.json is empty'}\n"
+        L"if([string]::IsNullOrWhiteSpace($raw)){throw 'launcher profile file is empty'}\n"
         L"$obj=$raw|ConvertFrom-Json\n"
-        L"if($null -eq $obj.profiles){$obj|Add-Member -NotePropertyName profiles -NotePropertyValue ([pscustomobject]@{})}\n"
+        L"if($null -eq $obj.profiles){$obj|Add-Member -NotePropertyName profiles -NotePropertyValue ([pscustomobject]@{}) -Force}\n"
+        L"$now=(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')\n"
         L"$profile=[pscustomobject]@{\n"
         L" name='" << escapePs(name) << L"'\n"
         L" type='custom'\n"
-        L" created=(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')\n"
-        L" lastUsed=(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')\n"
+        L" created=$now\n"
+        L" lastUsed=$now\n"
         L" lastVersionId='" << escapePs(versionId) << L"'\n"
         L" gameDir='" << escapePs(gameDir) << L"'\n"
         L" javaArgs='-Xmx" << memoryMb << L"M'\n"
@@ -365,12 +438,15 @@ bool MinecraftProfile::writeWithPowerShell(
         L"$existing=$obj.profiles.PSObject.Properties[$key]\n"
         L"if($null -ne $existing){$existing.Value=$profile}else{$obj.profiles|Add-Member -NotePropertyName $key -NotePropertyValue $profile -Force}\n"
         L"if($obj.PSObject.Properties['selectedProfile']){$obj.selectedProfile=$key}else{$obj|Add-Member -NotePropertyName selectedProfile -NotePropertyValue $key -Force}\n"
-        L"$json=$obj|ConvertTo-Json -Depth 32\n"
-        L"[System.IO.File]::WriteAllText($path,$json,(New-Object System.Text.UTF8Encoding($false)))\n"
-        L"$verify=(Get-Content -Raw -LiteralPath $path)|ConvertFrom-Json\n"
-        L"if($null -eq $verify.profiles.PSObject.Properties[$key]){throw 'Profile verification failed after write'}\n"
+        L"$json=$obj|ConvertTo-Json -Depth 64\n"
+        L"[System.IO.File]::WriteAllText($tmp,$json,(New-Object System.Text.UTF8Encoding($false)))\n"
+        L"$verify=(Get-Content -Raw -LiteralPath $tmp)|ConvertFrom-Json\n"
+        L"if($null -eq $verify.profiles.PSObject.Properties[$key]){throw 'Profile verification failed'}\n"
         L"if($verify.profiles.$key.lastVersionId -ne '" << escapePs(versionId) << L"'){throw 'Version ID verification failed'}\n"
         L"if($verify.profiles.$key.gameDir -ne '" << escapePs(gameDir) << L"'){throw 'Game directory verification failed'}\n"
+        L"Move-Item -LiteralPath $tmp -Destination $path -Force\n"
+        L"$verify2=(Get-Content -Raw -LiteralPath $path)|ConvertFrom-Json\n"
+        L"if($null -eq $verify2.profiles.PSObject.Properties[$key]){throw 'Final profile verification failed'}\n"
         L"[System.IO.File]::WriteAllText($result,'OK',(New-Object System.Text.UTF8Encoding($false)))\n";
 
     script.close();
@@ -379,6 +455,8 @@ bool MinecraftProfile::writeWithPowerShell(
     {
         if (std::filesystem::exists(resultPath))
             std::filesystem::remove(resultPath);
+        if (std::filesystem::exists(tempPath))
+            std::filesystem::remove(tempPath);
     }
     catch (...)
     {
@@ -394,7 +472,11 @@ bool MinecraftProfile::writeWithPowerShell(
     if (!std::filesystem::exists(resultPath))
         return false;
 
-    std::ifstream resultFile(resultPath, std::ios::binary);
+    std::ifstream resultFile(
+        resultPath,
+        std::ios::binary
+    );
+
     std::string result(
         (std::istreambuf_iterator<char>(resultFile)),
         std::istreambuf_iterator<char>()
@@ -406,9 +488,7 @@ bool MinecraftProfile::writeWithPowerShell(
 std::wstring MinecraftProfile::findLauncherExecutable()
 {
     const std::wstring pf86 =
-        knownFolder(
-            FOLDERID_ProgramFilesX86
-        );
+        knownFolder(FOLDERID_ProgramFilesX86);
 
     if (!pf86.empty())
     {
@@ -421,10 +501,22 @@ std::wstring MinecraftProfile::findLauncherExecutable()
             return candidate.wstring();
     }
 
+    const std::wstring pf =
+        knownFolder(FOLDERID_ProgramFiles);
+
+    if (!pf.empty())
+    {
+        const std::filesystem::path candidate =
+            std::filesystem::path(pf) /
+            L"Minecraft Launcher" /
+            L"MinecraftLauncher.exe";
+
+        if (std::filesystem::exists(candidate))
+            return candidate.wstring();
+    }
+
     const std::wstring local =
-        knownFolder(
-            FOLDERID_LocalAppData
-        );
+        knownFolder(FOLDERID_LocalAppData);
 
     if (!local.empty())
     {
@@ -459,9 +551,7 @@ bool MinecraftProfile::openOfficialLauncher()
             );
 
         return
-            reinterpret_cast<INT_PTR>(
-                result
-            ) > 32;
+            reinterpret_cast<INT_PTR>(result) > 32;
     }
 
     HINSTANCE result =
@@ -475,7 +565,5 @@ bool MinecraftProfile::openOfficialLauncher()
         );
 
     return
-        reinterpret_cast<INT_PTR>(
-            result
-        ) > 32;
+        reinterpret_cast<INT_PTR>(result) > 32;
 }

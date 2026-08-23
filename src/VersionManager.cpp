@@ -35,6 +35,31 @@ std::wstring lower(std::wstring value)
     );
     return value;
 }
+
+void writeUtf8File(
+    const std::filesystem::path& path,
+    const std::string& bytes)
+{
+    std::ofstream out(
+        path,
+        std::ios::binary | std::ios::trunc
+    );
+
+    if (!out)
+        throw std::runtime_error(
+            "Unable to write Minecraft version metadata."
+        );
+
+    out.write(
+        bytes.data(),
+        static_cast<std::streamsize>(bytes.size())
+    );
+
+    if (!out)
+        throw std::runtime_error(
+            "Unable to finish writing Minecraft version metadata."
+        );
+}
 }
 
 VersionPackageInfo VersionManager::fetchPackageInfo(
@@ -114,12 +139,11 @@ VersionPackageInfo VersionManager::fetchPackageInfo(
 
     if (
         !serverMinecraft.empty() &&
-        serverMinecraft !=
-            manifest.minecraft.version
+        serverMinecraft != manifest.minecraft.version
     )
     {
         throw std::runtime_error(
-            "Server Forge package targets a different Minecraft version."
+            "Server loader package targets a different Minecraft version."
         );
     }
 
@@ -135,12 +159,11 @@ VersionPackageInfo VersionManager::fetchPackageInfo(
 
     if (
         !serverLoaderVersion.empty() &&
-        serverLoaderVersion !=
-            manifest.minecraft.loaderVersion
+        serverLoaderVersion != manifest.minecraft.loaderVersion
     )
     {
         throw std::runtime_error(
-            "Server version package version does not match the modpack."
+            "Server loader package version does not match the modpack."
         );
     }
 
@@ -169,6 +192,139 @@ std::wstring VersionManager::minecraftRoot()
 
     CoTaskMemFree(roaming);
     return result;
+}
+
+bool VersionManager::isMinecraftBaseInstalled(
+    const std::wstring& minecraftVersion)
+{
+    const std::wstring root = minecraftRoot();
+
+    if (root.empty() || minecraftVersion.empty())
+        return false;
+
+    const std::filesystem::path dir =
+        std::filesystem::path(root) /
+        L"versions" /
+        minecraftVersion;
+
+    return
+        std::filesystem::exists(
+            dir / (minecraftVersion + L".json")
+        ) &&
+        std::filesystem::exists(
+            dir / (minecraftVersion + L".jar")
+        );
+}
+
+void VersionManager::ensureMinecraftBaseVersion(
+    const std::wstring& minecraftVersion)
+{
+    if (minecraftVersion.empty())
+        throw std::runtime_error(
+            "Minecraft version is empty."
+        );
+
+    if (isMinecraftBaseInstalled(minecraftVersion))
+        return;
+
+    const std::wstring root = minecraftRoot();
+
+    if (root.empty())
+        throw std::runtime_error(
+            "Unable to locate %APPDATA%\\.minecraft."
+        );
+
+    std::filesystem::create_directories(
+        std::filesystem::path(root) / L"versions"
+    );
+
+    JsonValue manifest =
+        JsonLite::parse(
+            HttpClient::getUtf8(
+                AppConfig::MOJANG_VERSION_MANIFEST
+            )
+        );
+
+    std::string metadataUrl;
+
+    for (const JsonValue& entry :
+         manifest.get("versions").asArray())
+    {
+        if (
+            utf8ToWide(
+                entry.get("id").asString()
+            ) == minecraftVersion
+        )
+        {
+            metadataUrl =
+                entry.get("url").asString();
+            break;
+        }
+    }
+
+    if (metadataUrl.empty())
+        throw std::runtime_error(
+            "The requested Minecraft version was not found in Mojang's version manifest."
+        );
+
+    const std::string versionJson =
+        HttpClient::getUtf8(
+            utf8ToWide(metadataUrl)
+        );
+
+    JsonValue versionRoot =
+        JsonLite::parse(versionJson);
+
+    const std::wstring clientUrl =
+        utf8ToWide(
+            versionRoot
+                .get("downloads")
+                .get("client")
+                .get("url")
+                .asString()
+        );
+
+    if (clientUrl.empty())
+        throw std::runtime_error(
+            "Mojang version metadata does not contain a client download."
+        );
+
+    const std::filesystem::path versionDir =
+        std::filesystem::path(root) /
+        L"versions" /
+        minecraftVersion;
+
+    std::filesystem::create_directories(
+        versionDir
+    );
+
+    const std::filesystem::path jsonPath =
+        versionDir /
+        (minecraftVersion + L".json");
+
+    const std::filesystem::path jarPath =
+        versionDir /
+        (minecraftVersion + L".jar");
+
+    // Write metadata first. The official launcher can use this metadata to
+    // resolve libraries/assets it does not already have.
+    writeUtf8File(
+        jsonPath,
+        versionJson
+    );
+
+    if (!std::filesystem::exists(jarPath))
+    {
+        HttpClient::downloadToFile(
+            clientUrl,
+            jarPath.wstring()
+        );
+    }
+
+    if (!isMinecraftBaseInstalled(minecraftVersion))
+        throw std::runtime_error(
+            "Minecraft base version download completed, but the version files are still incomplete."
+        );
 }
 
 bool VersionManager::isInstalled(
@@ -254,7 +410,7 @@ void VersionManager::install(
             std::filesystem::remove(archive);
 
             throw std::runtime_error(
-                "Forge version package failed SHA-256 verification."
+                "Loader version package failed SHA-256 verification."
             );
         }
     }
@@ -264,21 +420,7 @@ void VersionManager::install(
 
     std::filesystem::create_directories(extractDir);
 
-    std::wstring script =
-        L"$ErrorActionPreference='Stop'; "
-        L"Expand-Archive -LiteralPath " +
-        quote(archive.wstring()) +
-        L" -DestinationPath " +
-        quote(extractDir.wstring()) +
-        L" -Force; "
-        L"Copy-Item -LiteralPath (" +
-        quote(extractDir.wstring()) +
-        L" + '\\*') -Destination " +
-        quote(root) +
-        L" -Recurse -Force;";
-
-    // Copy-Item -LiteralPath does not expand wildcard; use Get-ChildItem.
-    script =
+    const std::wstring script =
         L"$ErrorActionPreference='Stop'; "
         L"Expand-Archive -LiteralPath " +
         quote(archive.wstring()) +
@@ -293,15 +435,31 @@ void VersionManager::install(
 
     if (!runPowerShell(script))
         throw std::runtime_error(
-            "Unable to extract the Forge version package into .minecraft."
+            "Unable to extract the loader version package into .minecraft."
         );
 
     if (!isInstalled(package))
         throw std::runtime_error(
-            "Forge package extracted, but the expected version profile was not found."
+            "Loader package extracted, but the expected version profile was not found."
         );
 
     std::filesystem::remove_all(extractDir);
+}
+
+VersionPackageInfo VersionManager::ensurePackRuntime(
+    const PackManifest& manifest)
+{
+    ensureMinecraftBaseVersion(
+        manifest.minecraft.version
+    );
+
+    VersionPackageInfo package =
+        fetchPackageInfo(manifest);
+
+    if (!isInstalled(package))
+        install(package);
+
+    return package;
 }
 
 bool VersionManager::runPowerShell(
@@ -323,8 +481,7 @@ bool VersionManager::runPowerShell(
 
     mutableCommand.push_back(L'\0');
 
-    BOOL created =
-        CreateProcessW(
+    if (!CreateProcessW(
             nullptr,
             mutableCommand.data(),
             nullptr,
@@ -334,11 +491,10 @@ bool VersionManager::runPowerShell(
             nullptr,
             nullptr,
             &startup,
-            &process
-        );
-
-    if (!created)
+            &process))
+    {
         return false;
+    }
 
     WaitForSingleObject(
         process.hProcess,
@@ -352,13 +508,8 @@ bool VersionManager::runPowerShell(
         &exitCode
     );
 
-    CloseHandle(
-        process.hThread
-    );
-
-    CloseHandle(
-        process.hProcess
-    );
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
 
     return exitCode == 0;
 }
@@ -369,7 +520,7 @@ std::wstring VersionManager::utf8ToWide(
     if (value.empty())
         return {};
 
-    const int count =
+    int length =
         MultiByteToWideChar(
             CP_UTF8,
             0,
@@ -380,7 +531,7 @@ std::wstring VersionManager::utf8ToWide(
         );
 
     std::wstring result(
-        count,
+        length,
         L'\0'
     );
 
@@ -390,7 +541,7 @@ std::wstring VersionManager::utf8ToWide(
         value.data(),
         static_cast<int>(value.size()),
         result.data(),
-        count
+        length
     );
 
     return result;
@@ -402,151 +553,128 @@ std::wstring VersionManager::sha256File(
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
 
-    if (
-        BCryptOpenAlgorithmProvider(
+    DWORD objectLength = 0;
+    DWORD hashLength = 0;
+    DWORD copied = 0;
+
+    if (BCryptOpenAlgorithmProvider(
             &algorithm,
             BCRYPT_SHA256_ALGORITHM,
             nullptr,
-            0
-        ) < 0
-    )
+            0) < 0)
     {
         throw std::runtime_error(
             "Unable to initialize SHA-256."
         );
     }
 
-    DWORD objectLength = 0;
-    DWORD hashLength = 0;
-    DWORD resultLength = 0;
-
-    BCryptGetProperty(
-        algorithm,
-        BCRYPT_OBJECT_LENGTH,
-        reinterpret_cast<PUCHAR>(&objectLength),
-        sizeof(objectLength),
-        &resultLength,
-        0
-    );
-
-    BCryptGetProperty(
-        algorithm,
-        BCRYPT_HASH_LENGTH,
-        reinterpret_cast<PUCHAR>(&hashLength),
-        sizeof(hashLength),
-        &resultLength,
-        0
-    );
-
-    std::vector<UCHAR> object(objectLength);
-    std::vector<UCHAR> digest(hashLength);
-
     if (
-        BCryptCreateHash(
+        BCryptGetProperty(
+            algorithm,
+            BCRYPT_OBJECT_LENGTH,
+            reinterpret_cast<PUCHAR>(&objectLength),
+            sizeof(objectLength),
+            &copied,
+            0
+        ) < 0 ||
+        BCryptGetProperty(
+            algorithm,
+            BCRYPT_HASH_LENGTH,
+            reinterpret_cast<PUCHAR>(&hashLength),
+            sizeof(hashLength),
+            &copied,
+            0
+        ) < 0
+    )
+    {
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+        throw std::runtime_error(
+            "Unable to configure SHA-256."
+        );
+    }
+
+    std::vector<unsigned char> object(objectLength);
+    std::vector<unsigned char> digest(hashLength);
+
+    if (BCryptCreateHash(
             algorithm,
             &hash,
             object.data(),
             objectLength,
             nullptr,
             0,
-            0
-        ) < 0
-    )
+            0) < 0)
     {
-        BCryptCloseAlgorithmProvider(
-            algorithm,
-            0
-        );
-
+        BCryptCloseAlgorithmProvider(algorithm, 0);
         throw std::runtime_error(
             "Unable to create SHA-256 hash."
         );
     }
 
-    std::ifstream input(
+    std::ifstream file(
         std::filesystem::path(path),
         std::ios::binary
     );
 
-    if (!input)
+    if (!file)
     {
         BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(
-            algorithm,
-            0
-        );
-
+        BCryptCloseAlgorithmProvider(algorithm, 0);
         throw std::runtime_error(
             "Unable to read downloaded version package."
         );
     }
 
-    std::vector<char> buffer(
-        1024 * 1024
-    );
+    std::vector<char> buffer(1024 * 1024);
 
-    while (input)
+    while (file)
     {
-        input.read(
+        file.read(
             buffer.data(),
-            static_cast<std::streamsize>(
-                buffer.size()
-            )
+            static_cast<std::streamsize>(buffer.size())
         );
 
-        const std::streamsize count =
-            input.gcount();
+        const std::streamsize read =
+            file.gcount();
 
-        if (count > 0)
+        if (read > 0)
         {
-            BCryptHashData(
-                hash,
-                reinterpret_cast<PUCHAR>(
-                    buffer.data()
-                ),
-                static_cast<ULONG>(count),
-                0
-            );
+            if (BCryptHashData(
+                    hash,
+                    reinterpret_cast<PUCHAR>(buffer.data()),
+                    static_cast<ULONG>(read),
+                    0) < 0)
+            {
+                BCryptDestroyHash(hash);
+                BCryptCloseAlgorithmProvider(algorithm, 0);
+                throw std::runtime_error(
+                    "Unable to hash downloaded version package."
+                );
+            }
         }
     }
 
-    if (
-        BCryptFinishHash(
+    if (BCryptFinishHash(
             hash,
             digest.data(),
             hashLength,
-            0
-        ) < 0
-    )
+            0) < 0)
     {
         BCryptDestroyHash(hash);
-        BCryptCloseAlgorithmProvider(
-            algorithm,
-            0
-        );
-
+        BCryptCloseAlgorithmProvider(algorithm, 0);
         throw std::runtime_error(
             "Unable to finish SHA-256 hash."
         );
     }
 
     BCryptDestroyHash(hash);
-
-    BCryptCloseAlgorithmProvider(
-        algorithm,
-        0
-    );
+    BCryptCloseAlgorithmProvider(algorithm, 0);
 
     std::wstringstream stream;
+    stream << std::hex << std::setfill(L'0');
 
-    stream
-        << std::hex
-        << std::setfill(L'0');
-
-    for (UCHAR byte : digest)
-        stream
-            << std::setw(2)
-            << static_cast<int>(byte);
+    for (unsigned char byte : digest)
+        stream << std::setw(2) << static_cast<unsigned int>(byte);
 
     return stream.str();
 }

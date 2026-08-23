@@ -10,6 +10,7 @@
 
 #include "InstallEngine.h"
 #include "Models.h"
+#include "NewsManager.h"
 #include "Settings.h"
 
 class MainWindow
@@ -33,6 +34,9 @@ private:
     Page page_ = Page::Modpacks;
 
     std::vector<Modpack> packs_;
+    std::vector<NewsItem> news_;
+    std::wstring newsStatus_ = L"News has not been loaded yet.";
+    int openNewsIndex_ = -1;
     PackManifest currentManifest_;
     int selectedPack_ = -1;
 
@@ -79,6 +83,15 @@ private:
     void loadManifest(const Modpack& pack);
     void ensureArtwork(const Modpack& pack);
 
+    void refreshNews();
+    void ensureNewsArtwork();
+
+    RECT newsRefreshRect(const RECT& client) const;
+    RECT newsCardRect(const RECT& client, int index) const;
+    RECT newsModalRect(const RECT& client) const;
+    RECT newsModalCloseRect(const RECT& client) const;
+    void paintNewsModal(HDC dc, const RECT& client);
+
     void startInstallOrRepair();
     void openInstalledInstance();
     void launchOfficialMinecraftLauncher();
@@ -109,6 +122,18 @@ private:
     RECT resetFolderRect(const RECT& client) const;
     RECT memoryMinusRect(const RECT& client) const;
     RECT memoryPlusRect(const RECT& client) const;
+
+    // Home page scrolling
+    static constexpr int HOME_CONTENT_HEIGHT = 980;
+    int homeScrollY_ = 0;
+    bool homeScrollbarDragging_ = false;
+    int homeScrollbarDragOffset_ = 0;
+
+    int homeMaxScroll(const RECT& client) const;
+    RECT homeScrollbarTrackRect(const RECT& client) const;
+    RECT homeScrollbarThumbRect(const RECT& client) const;
+    void setHomeScroll(int value, const RECT& client);
+    void paintHomeScrollbar(HDC dc, const RECT& client);
 
     static constexpr int TITLEBAR_HEIGHT = 38;
 

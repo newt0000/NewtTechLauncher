@@ -29,6 +29,8 @@ add_executable(NewtTechLauncher WIN32
         src/VersionManager.cpp
         src/MainWindow.h
         src/MainWindow.cpp
+        src/NewsManager.h
+        src/NewsManager.cpp
         src/LauncherResources.rc
 )
 

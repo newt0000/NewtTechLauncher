@@ -4,6 +4,7 @@
 #include "VersionManager.h"
 
 #include <string>
+#include <vector>
 
 class MinecraftProfile
 {
@@ -19,7 +20,7 @@ public:
     static bool openOfficialLauncher();
 
 private:
-    static std::wstring launcherProfilesFile(
+    static std::vector<std::wstring> launcherProfileFiles(
         const std::wstring& minecraftRoot
     );
 
@@ -35,6 +36,10 @@ private:
         const std::wstring& versionId,
         const std::wstring& icon,
         int memoryMb
+    );
+
+    static int safeMemoryMb(
+        int requestedMb
     );
 
     static std::wstring escapePs(

@@ -6,6 +6,7 @@
 #include "JsonLite.h"
 #include "VersionManager.h"
 #include "MinecraftProfile.h"
+#include "NewsManager.h"
 
 #include <objbase.h>
 #include <dwmapi.h>
@@ -49,7 +50,50 @@ void fillRectColor(
 
     DeleteObject(brush);
 }
+    static std::wstring formatNewsDate(const std::wstring& iso)
+{
+    // Expected:
+    // YYYY-MM-DDTHH:MM:SS+00:00
 
+    if (iso.length() < 16)
+        return iso;
+
+    try
+    {
+        const int year   = std::stoi(iso.substr(0, 4));
+        const int month  = std::stoi(iso.substr(5, 2));
+        const int day    = std::stoi(iso.substr(8, 2));
+        int hour         = std::stoi(iso.substr(11, 2));
+        const int minute = std::stoi(iso.substr(14, 2));
+
+        const bool pm = hour >= 12;
+
+        int displayHour = hour % 12;
+
+        if (displayHour == 0)
+            displayHour = 12;
+
+        wchar_t buffer[64];
+
+        swprintf(
+            buffer,
+            64,
+            L"%02d:%02d%ls %02d/%02d/%04d",
+            displayHour,
+            minute,
+            pm ? L"PM" : L"AM",
+            month,
+            day,
+            year
+        );
+
+        return buffer;
+    }
+    catch (...)
+    {
+        return iso;
+    }
+}
 void drawTextSimple(
     HDC dc,
     const std::wstring& text,
@@ -287,8 +331,295 @@ LRESULT MainWindow::handleMessage(
             return 0;
         }
 
+        case WM_KEYDOWN:
+        {
+            if (
+                wParam == VK_ESCAPE &&
+                openNewsIndex_ >= 0
+            )
+            {
+                openNewsIndex_ = -1;
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
+            break;
+        }
+
+        case WM_CAPTURECHANGED:
+        {
+            homeScrollbarDragging_ =
+                false;
+
+            return 0;
+        }
+
+        case WM_MOUSEWHEEL:
+        {
+            if (page_ == Page::Home)
+            {
+                RECT client{};
+                GetClientRect(
+                    hwnd_,
+                    &client
+                );
+
+                client.bottom -=
+                    TITLEBAR_HEIGHT;
+
+                const int delta =
+                    GET_WHEEL_DELTA_WPARAM(
+                        wParam
+                    );
+
+                const int notches =
+                    delta / WHEEL_DELTA;
+
+                setHomeScroll(
+                    homeScrollY_ -
+                    notches * 72,
+                    client
+                );
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
+            break;
+        }
+
+        case WM_LBUTTONDOWN:
+        {
+            if (
+                page_ == Page::Home &&
+                openNewsIndex_ >= 0
+            )
+            {
+                return 0;
+            }
+
+            if (page_ == Page::Home)
+            {
+                const int x =
+                    GET_X_LPARAM(lParam);
+
+                const int contentY =
+                    GET_Y_LPARAM(lParam) -
+                    TITLEBAR_HEIGHT;
+
+                RECT client{};
+                GetClientRect(
+                    hwnd_,
+                    &client
+                );
+
+                client.bottom -=
+                    TITLEBAR_HEIGHT;
+
+                const RECT track =
+                    homeScrollbarTrackRect(
+                        client
+                    );
+
+                const RECT thumb =
+                    homeScrollbarThumbRect(
+                        client
+                    );
+
+                if (
+                    homeMaxScroll(client) > 0 &&
+                    pointInRect(
+                        x,
+                        contentY,
+                        thumb
+                    )
+                )
+                {
+                    homeScrollbarDragging_ =
+                        true;
+
+                    homeScrollbarDragOffset_ =
+                        contentY -
+                        thumb.top;
+
+                    SetCapture(
+                        hwnd_
+                    );
+
+                    return 0;
+                }
+
+                if (
+                    homeMaxScroll(client) > 0 &&
+                    pointInRect(
+                        x,
+                        contentY,
+                        track
+                    )
+                )
+                {
+                    const int pageAmount =
+                        static_cast<int>(
+                            std::max<LONG>(
+                                120L,
+                                client.bottom - 100
+                            )
+                        );
+
+                    if (contentY < thumb.top)
+                    {
+                        setHomeScroll(
+                            homeScrollY_ -
+                            pageAmount,
+                            client
+                        );
+                    }
+                    else if (
+                        contentY >
+                        thumb.bottom
+                    )
+                    {
+                        setHomeScroll(
+                            homeScrollY_ +
+                            pageAmount,
+                            client
+                        );
+                    }
+
+                    InvalidateRect(
+                        hwnd_,
+                        nullptr,
+                        FALSE
+                    );
+
+                    return 0;
+                }
+            }
+
+            break;
+        }
+
+        case WM_MOUSEMOVE:
+        {
+            if (
+                page_ == Page::Home &&
+                homeScrollbarDragging_
+            )
+            {
+                RECT client{};
+                GetClientRect(
+                    hwnd_,
+                    &client
+                );
+
+                client.bottom -=
+                    TITLEBAR_HEIGHT;
+
+                const RECT track =
+                    homeScrollbarTrackRect(
+                        client
+                    );
+
+                const RECT thumb =
+                    homeScrollbarThumbRect(
+                        client
+                    );
+
+                const int thumbHeight =
+                    thumb.bottom -
+                    thumb.top;
+
+                const int usableTrack =
+                    static_cast<int>(
+                        std::max<LONG>(
+                            1L,
+                            (track.bottom -
+                             track.top) -
+                            thumbHeight
+                        )
+                    );
+
+                const int y =
+                    GET_Y_LPARAM(lParam) -
+                    TITLEBAR_HEIGHT;
+
+                int thumbTop =
+                    y -
+                    homeScrollbarDragOffset_;
+
+                thumbTop =
+                    std::clamp(
+                        thumbTop,
+                        static_cast<int>(
+                            track.top
+                        ),
+                        static_cast<int>(
+                            track.bottom -
+                            thumbHeight
+                        )
+                    );
+
+                const int maxScroll =
+                    homeMaxScroll(
+                        client
+                    );
+
+                const int newScroll =
+                    maxScroll > 0
+                        ? (
+                            (thumbTop -
+                             track.top) *
+                            maxScroll
+                          ) /
+                          usableTrack
+                        : 0;
+
+                setHomeScroll(
+                    newScroll,
+                    client
+                );
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
+            break;
+        }
+
         case WM_LBUTTONUP:
         {
+            if (homeScrollbarDragging_)
+            {
+                homeScrollbarDragging_ =
+                    false;
+
+                if (
+                    GetCapture() ==
+                    hwnd_
+                )
+                {
+                    ReleaseCapture();
+                }
+
+                return 0;
+            }
+
             const int x =
                 GET_X_LPARAM(lParam);
 
@@ -361,6 +692,34 @@ LRESULT MainWindow::handleMessage(
             contentClient.bottom -= TITLEBAR_HEIGHT;
 
             if (
+                page_ == Page::Home &&
+                openNewsIndex_ >= 0
+            )
+            {
+                if (
+                    pointInRect(
+                        x,
+                        contentY,
+                        newsModalCloseRect(
+                            contentClient
+                        )
+                    )
+                )
+                {
+                    openNewsIndex_ = -1;
+
+                    InvalidateRect(
+                        hwnd_,
+                        nullptr,
+                        FALSE
+                    );
+                }
+
+                // Modal is exclusive: prevent clicks from reaching Home/nav.
+                return 0;
+            }
+
+            if (
                 page_ == Page::Modpacks &&
                 pointInRect(x, contentY, refreshRect(contentClient))
             )
@@ -407,23 +766,20 @@ LRESULT MainWindow::handleMessage(
                     {
                         try
                         {
+                            setStatus(
+                                L"Preparing Minecraft " +
+                                currentManifest_.minecraft.version +
+                                L" + " +
+                                currentManifest_.minecraft.loader +
+                                L" " +
+                                currentManifest_.minecraft.loaderVersion +
+                                L"..."
+                            );
+
                             const VersionPackageInfo version =
-                                VersionManager::fetchPackageInfo(
+                                VersionManager::ensurePackRuntime(
                                     currentManifest_
                                 );
-
-                            if (!VersionManager::isInstalled(version))
-                            {
-                                setStatus(
-                                    L"Downloading " +
-                                    currentManifest_.minecraft.loader +
-                                    L" " +
-                                    currentManifest_.minecraft.loaderVersion +
-                                    L"..."
-                                );
-
-                                VersionManager::install(version);
-                            }
 
                             const std::wstring iconUrl =
                                 (
@@ -477,6 +833,10 @@ LRESULT MainWindow::handleMessage(
 
             if (page_ == Page::Home)
             {
+                const int virtualY =
+                    contentY +
+                    homeScrollY_;
+
                 RECT openPacks{
                     250,
                     310,
@@ -487,7 +847,7 @@ LRESULT MainWindow::handleMessage(
                 if (
                     pointInRect(
                         x,
-                        contentY,
+                        virtualY,
                         openPacks
                     )
                 )
@@ -502,6 +862,53 @@ LRESULT MainWindow::handleMessage(
                     );
 
                     return 0;
+                }
+
+                if (
+                    pointInRect(
+                        x,
+                        virtualY,
+                        newsRefreshRect(
+                            contentClient
+                        )
+                    )
+                )
+                {
+                    refreshNews();
+                    return 0;
+                }
+
+                const int count =
+                    static_cast<int>(
+                        std::min<size_t>(
+                            news_.size(),
+                            3
+                        )
+                    );
+
+                for (int i = 0; i < count; ++i)
+                {
+                    if (
+                        pointInRect(
+                            x,
+                            virtualY,
+                            newsCardRect(
+                                contentClient,
+                                i
+                            )
+                        )
+                    )
+                    {
+                        openNewsIndex_ = i;
+
+                        InvalidateRect(
+                            hwnd_,
+                            nullptr,
+                            FALSE
+                        );
+
+                        return 0;
+                    }
                 }
             }
 
@@ -622,11 +1029,19 @@ LRESULT MainWindow::handleMessage(
 
         case WM_SIZING:
         {
+            /*
+                WM_SIZE alone is not enough for a custom-drawn popup/frame:
+                Windows may wait until the sizing operation ends before
+                dispatching a useful WM_PAINT. Paint synchronously here so the
+                launcher layout follows the mouse continuously.
+            */
             InvalidateRect(
                 hwnd_,
                 nullptr,
                 FALSE
             );
+
+            UpdateWindow(hwnd_);
 
             return TRUE;
         }
@@ -640,6 +1055,8 @@ LRESULT MainWindow::handleMessage(
                     nullptr,
                     FALSE
                 );
+
+                UpdateWindow(hwnd_);
             }
 
             return 0;
@@ -647,7 +1064,11 @@ LRESULT MainWindow::handleMessage(
 
         case WM_WINDOWPOSCHANGED:
         {
-
+            /*
+                Covers programmatic/maximize/restore sizing as well as normal
+                interactive resizing. Let DefWindowProc perform its normal
+                bookkeeping, then repaint using the new client dimensions.
+            */
             const LRESULT result =
                 DefWindowProcW(
                     hwnd,
@@ -672,14 +1093,16 @@ LRESULT MainWindow::handleMessage(
 
         case WM_EXITSIZEMOVE:
         {
-            RedrawWindow(
+            /*
+                Final full repaint after the user releases the resize edge.
+            */
+            InvalidateRect(
                 hwnd_,
                 nullptr,
-                nullptr,
-                RDW_INVALIDATE |
-                RDW_UPDATENOW |
-                RDW_ALLCHILDREN
+                FALSE
             );
+
+            UpdateWindow(hwnd_);
 
             return 0;
         }
@@ -990,11 +1413,65 @@ void MainWindow::paint(HDC dc)
     switch (page_)
     {
         case Page::Home:
+        {
+            /*
+                Keep the sidebar fixed while only the Home content scrolls.
+                HOME_CONTENT_HEIGHT is a virtual canvas height; the visible
+                client remains clipped to the current window size.
+            */
+            RECT homeClient = content;
+
+            if (homeClient.bottom < HOME_CONTENT_HEIGHT)
+                homeClient.bottom = HOME_CONTENT_HEIGHT;
+
+            setHomeScroll(
+                homeScrollY_,
+                content
+            );
+
+            const int homeSaved =
+                SaveDC(memory);
+
+            IntersectClipRect(
+                memory,
+                220,
+                0,
+                content.right,
+                content.bottom
+            );
+
+            OffsetViewportOrgEx(
+                memory,
+                0,
+                -homeScrollY_,
+                nullptr
+            );
+
             paintHome(
+                memory,
+                homeClient
+            );
+
+            RestoreDC(
+                memory,
+                homeSaved
+            );
+
+            paintHomeScrollbar(
                 memory,
                 content
             );
+
+            if (openNewsIndex_ >= 0)
+            {
+                paintNewsModal(
+                    memory,
+                    content
+                );
+            }
+
             break;
+        }
 
         case Page::Modpacks:
             paintModpacks(
@@ -1191,6 +1668,474 @@ void MainWindow::paintSidebar(
     );
 }
 
+int MainWindow::homeMaxScroll(
+    const RECT& client) const
+{
+    const int viewportHeight =
+        std::max(
+            0L,
+            client.bottom -
+            client.top
+        );
+
+    return
+        std::max(
+            0,
+            HOME_CONTENT_HEIGHT -
+            viewportHeight
+        );
+}
+
+RECT MainWindow::homeScrollbarTrackRect(
+    const RECT& client) const
+{
+    return RECT{
+        client.right - 13,
+        12,
+        client.right - 5,
+        client.bottom - 12
+    };
+}
+
+RECT MainWindow::homeScrollbarThumbRect(
+    const RECT& client) const
+{
+    const RECT track =
+        homeScrollbarTrackRect(
+            client
+        );
+
+    const int trackHeight =
+        std::max(
+            1L,
+            track.bottom -
+            track.top
+        );
+
+    const int viewportHeight =
+        std::max(
+            1L,
+            client.bottom -
+            client.top
+        );
+
+    const int contentHeight =
+        std::max(
+            HOME_CONTENT_HEIGHT,
+            viewportHeight
+        );
+
+    int thumbHeight =
+        (
+            trackHeight *
+            viewportHeight
+        ) /
+        contentHeight;
+
+    thumbHeight =
+        std::clamp(
+            thumbHeight,
+            42,
+            trackHeight
+        );
+
+    const int maxScroll =
+        homeMaxScroll(
+            client
+        );
+
+    const int usableTrack =
+        std::max(
+            0,
+            trackHeight -
+            thumbHeight
+        );
+
+    int thumbTop =
+        track.top;
+
+    if (
+        maxScroll > 0 &&
+        usableTrack > 0
+    )
+    {
+        thumbTop +=
+            (
+                homeScrollY_ *
+                usableTrack
+            ) /
+            maxScroll;
+    }
+
+    return RECT{
+        track.left,
+        thumbTop,
+        track.right,
+        thumbTop +
+        thumbHeight
+    };
+}
+
+void MainWindow::setHomeScroll(
+    int value,
+    const RECT& client)
+{
+    homeScrollY_ =
+        std::clamp(
+            value,
+            0,
+            homeMaxScroll(
+                client
+            )
+        );
+}
+
+void MainWindow::paintHomeScrollbar(
+    HDC dc,
+    const RECT& client)
+{
+    if (
+        homeMaxScroll(
+            client
+        ) <= 0
+    )
+    {
+        return;
+    }
+
+    const RECT track =
+        homeScrollbarTrackRect(
+            client
+        );
+
+    const RECT thumb =
+        homeScrollbarThumbRect(
+            client
+        );
+
+    fillRectColor(
+        dc,
+        track,
+        BORDER
+    );
+
+    fillRectColor(
+        dc,
+        thumb,
+        homeScrollbarDragging_
+            ? CYAN
+            : MUTED
+    );
+}
+
+RECT MainWindow::newsRefreshRect(
+    const RECT& client) const
+{
+    const LONG top = 576;
+
+    return RECT{
+        client.right - 142,
+        top,
+        client.right - 46,
+        top + 38
+    };
+}
+
+RECT MainWindow::newsCardRect(
+    const RECT& client,
+    int index) const
+{
+    const LONG left = 241;
+    const LONG right =
+        client.right - 30;
+    const LONG gap = 12;
+
+    const int count =
+        static_cast<int>(
+            std::min<size_t>(
+                news_.size(),
+                3
+            )
+        );
+
+    if (
+        count <= 0 ||
+        index < 0 ||
+        index >= count
+    )
+    {
+        return RECT{};
+    }
+
+    const LONG available =
+        right -
+        left -
+        gap * (count - 1);
+
+    const LONG width =
+        available / count;
+
+    const LONG top = 641;
+    const LONG bottom = 845;
+
+    const LONG x =
+        left +
+        index * (width + gap);
+
+    return RECT{
+        x,
+        top,
+        x + width,
+        bottom
+    };
+}
+
+RECT MainWindow::newsModalRect(
+    const RECT& client) const
+{
+    const LONG width =
+        std::min<LONG>(
+            760L,
+            std::max<LONG>(
+                520L,
+                client.right - 300
+            )
+        );
+
+    const LONG height =
+        std::min<LONG>(
+            590L,
+            std::max<LONG>(
+                430L,
+                client.bottom - 70
+            )
+        );
+
+    const LONG left =
+        220 +
+        (
+            (client.right - 220) -
+            width
+        ) / 2;
+
+    const LONG top =
+        (
+            client.bottom -
+            height
+        ) / 2;
+
+    return RECT{
+        left,
+        top,
+        left + width,
+        top + height
+    };
+}
+
+RECT MainWindow::newsModalCloseRect(
+    const RECT& client) const
+{
+    const RECT modal =
+        newsModalRect(
+            client
+        );
+
+    return RECT{
+        modal.right - 48,
+        modal.top + 10,
+        modal.right - 12,
+        modal.top + 42
+    };
+}
+
+void MainWindow::paintNewsModal(
+    HDC dc,
+    const RECT& client)
+{
+    if (
+        openNewsIndex_ < 0 ||
+        openNewsIndex_ >=
+            static_cast<int>(
+                news_.size()
+            )
+    )
+    {
+        return;
+    }
+
+    const NewsItem& item =
+        news_[openNewsIndex_];
+
+    // Darken the full content area behind the article.
+    RECT overlay{
+        220,
+        0,
+        client.right,
+        client.bottom
+    };
+
+    fillRectColor(
+        dc,
+        overlay,
+        RGB(3, 8, 20)
+    );
+
+    const RECT modal =
+        newsModalRect(
+            client
+        );
+
+    fillRectColor(
+        dc,
+        modal,
+        CARD
+    );
+
+    fillRectColor(
+        dc,
+        RECT{
+            modal.left,
+            modal.top,
+            modal.left + 5,
+            modal.bottom
+        },
+        item.pinned
+            ? ACCENT
+            : CYAN
+    );
+
+    const RECT close =
+        newsModalCloseRect(
+            client
+        );
+
+    fillRectColor(
+        dc,
+        close,
+        ACCENT
+    );
+
+    drawTextSimple(
+        dc,
+        L"×",
+        close,
+        fontNormal_,
+        TEXT_DARK,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    LONG contentTop =
+        modal.top + 22;
+
+    if (!item.imageUrl.empty())
+    {
+        const std::wstring imageKey =
+            L"news:" +
+            item.imageUrl;
+
+        auto it =
+            imageCache_.find(
+                imageKey
+            );
+
+        if (
+            it != imageCache_.end() &&
+            it->second
+        )
+        {
+            RECT hero{
+                modal.left + 22,
+                modal.top + 22,
+                modal.right - 70,
+                modal.top + 190
+            };
+
+            drawBitmapCover(
+                dc,
+                it->second,
+                hero
+            );
+
+            contentTop =
+                hero.bottom + 18;
+        }
+    }
+
+    drawTextSimple(
+        dc,
+        item.pinned
+            ? L"PINNED • " + item.category
+            : item.category,
+        RECT{
+            modal.left + 24,
+            contentTop,
+            modal.right - 24,
+            contentTop + 23
+        },
+        fontMeta_,
+        item.pinned
+            ? ACCENT
+            : CYAN,
+        DT_LEFT |
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    drawTextSimple(
+        dc,
+        item.title,
+        RECT{
+            modal.left + 24,
+            contentTop + 29,
+            modal.right - 24,
+            contentTop + 72
+        },
+        fontTitle_,
+        TEXT,
+        DT_LEFT |
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    drawTextSimple(
+        dc,
+        formatNewsDate(item.published),
+        RECT{
+            modal.left + 24,
+            contentTop + 76,
+            modal.right - 24,
+            contentTop + 98
+        },
+        fontSmall_,
+        MUTED,
+        DT_LEFT |
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    const std::wstring body =
+        item.body.empty()
+            ? item.summary
+            : item.body;
+
+    drawTextSimple(
+        dc,
+        body,
+        RECT{
+            modal.left + 24,
+            contentTop + 112,
+            modal.right - 24,
+            modal.bottom - 26
+        },
+        fontNormal_,
+        TEXT,
+        DT_LEFT |
+        DT_WORDBREAK
+    );
+}
+
 void MainWindow::paintHome(
     HDC dc,
     const RECT& client)
@@ -1377,6 +2322,297 @@ void MainWindow::paintHome(
         DT_LEFT |
         DT_WORDBREAK
     );
+
+    /*
+        News & Updates
+        ----------------
+        The header and cards live on the virtual Home canvas so they scroll
+        naturally with the rest of the Home page.
+    */
+    const LONG newsTop = 565;
+
+    RECT newsHeader{
+        241,
+        newsTop,
+        client.right - 30,
+        newsTop + 64
+    };
+
+    fillRectColor(
+        dc,
+        newsHeader,
+        CARD
+    );
+
+    fillRectColor(
+        dc,
+        RECT{
+            newsHeader.left,
+            newsHeader.top,
+            newsHeader.left + 4,
+            newsHeader.bottom
+        },
+        CYAN
+    );
+
+    drawTextSimple(
+        dc,
+        L"NEWS & UPDATES",
+        RECT{
+            newsHeader.left + 18,
+            newsHeader.top + 10,
+            newsHeader.right - 150,
+            newsHeader.top + 31
+        },
+        fontMeta_,
+        CYAN,
+        DT_LEFT |
+        DT_SINGLELINE
+    );
+
+    drawTextSimple(
+        dc,
+        newsStatus_,
+        RECT{
+            newsHeader.left + 18,
+            newsHeader.top + 33,
+            newsHeader.right - 150,
+            newsHeader.bottom - 8
+        },
+        fontSmall_,
+        MUTED,
+        DT_LEFT |
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    const RECT refresh =
+        newsRefreshRect(client);
+
+    fillRectColor(
+        dc,
+        refresh,
+        PANEL
+    );
+
+    drawTextSimple(
+        dc,
+        L"Refresh News",
+        refresh,
+        fontSmall_,
+        TEXT,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    if (news_.empty())
+    {
+        RECT emptyCard{
+            241,
+            newsHeader.bottom + 12,
+            client.right - 30,
+            newsHeader.bottom + 198
+        };
+
+        fillRectColor(
+            dc,
+            emptyCard,
+            PANEL
+        );
+
+        drawTextSimple(
+            dc,
+            L"No news to display",
+            RECT{
+                emptyCard.left + 24,
+                emptyCard.top + 32,
+                emptyCard.right - 24,
+                emptyCard.top + 62
+            },
+            fontNormal_,
+            TEXT,
+            DT_LEFT |
+            DT_SINGLELINE
+        );
+
+        drawTextSimple(
+            dc,
+            newsStatus_,
+            RECT{
+                emptyCard.left + 24,
+                emptyCard.top + 70,
+                emptyCard.right - 24,
+                emptyCard.bottom - 24
+            },
+            fontSmall_,
+            MUTED,
+            DT_LEFT |
+            DT_WORDBREAK
+        );
+    }
+    else
+    {
+        const int count =
+            static_cast<int>(
+                std::min<size_t>(
+                    news_.size(),
+                    3
+                )
+            );
+
+        for (int i = 0; i < count; ++i)
+        {
+            const NewsItem& item =
+                news_[i];
+
+            const RECT card =
+                newsCardRect(
+                    client,
+                    i
+                );
+
+            fillRectColor(
+                dc,
+                card,
+                PANEL
+            );
+
+            fillRectColor(
+                dc,
+                RECT{
+                    card.left,
+                    card.top,
+                    card.right,
+                    card.top + 4
+                },
+                item.pinned
+                    ? ACCENT
+                    : CYAN
+            );
+
+            LONG textLeft =
+                card.left + 16;
+
+            if (!item.imageUrl.empty())
+            {
+                const std::wstring imageKey =
+                    L"news:" +
+                    item.imageUrl;
+
+                auto it =
+                    imageCache_.find(
+                        imageKey
+                    );
+
+                if (
+                    it != imageCache_.end() &&
+                    it->second
+                )
+                {
+                    RECT thumb{
+                        card.left + 16,
+                        card.top + 18,
+                        card.left + 108,
+                        card.top + 92
+                    };
+
+                    drawBitmapCover(
+                        dc,
+                        it->second,
+                        thumb
+                    );
+
+                    textLeft =
+                        thumb.right + 14;
+                }
+            }
+
+            drawTextSimple(
+                dc,
+                item.pinned
+                    ? L"PINNED • " + item.category
+                    : item.category,
+                RECT{
+                    textLeft,
+                    card.top + 16,
+                    card.right - 16,
+                    card.top + 37
+                },
+                fontMeta_,
+                item.pinned
+                    ? ACCENT
+                    : CYAN,
+                DT_LEFT |
+                DT_SINGLELINE |
+                DT_END_ELLIPSIS
+            );
+
+            drawTextSimple(
+                dc,
+                item.title,
+                RECT{
+                    textLeft,
+                    card.top + 43,
+                    card.right - 16,
+                    card.top + 72
+                },
+                fontNormal_,
+                TEXT,
+                DT_LEFT |
+                DT_SINGLELINE |
+                DT_END_ELLIPSIS
+            );
+
+            drawTextSimple(
+                dc,
+                item.summary,
+                RECT{
+                    textLeft,
+                    card.top + 80,
+                    card.right - 16,
+                    card.bottom - 42
+                },
+                fontSmall_,
+                MUTED,
+                DT_LEFT |
+                DT_WORDBREAK |
+                DT_END_ELLIPSIS
+            );
+
+            drawTextSimple(
+                dc,
+                formatNewsDate(item.published),
+                RECT{
+                    card.left + 16,
+                    card.bottom - 31,
+                    card.right - 105,
+                    card.bottom - 10
+                },
+                fontSmall_,
+                MUTED,
+                DT_LEFT |
+                DT_SINGLELINE |
+                DT_END_ELLIPSIS
+            );
+
+            drawTextSimple(
+                dc,
+                L"Read Article  >",
+                RECT{
+                    card.right - 105,
+                    card.bottom - 31,
+                    card.right - 16,
+                    card.bottom - 10
+                },
+                fontSmall_,
+                CYAN,
+                DT_RIGHT |
+                DT_SINGLELINE
+            );
+        }
+    }
+
 }
 
 void MainWindow::paintModpacks(
@@ -2457,6 +3693,133 @@ void MainWindow::ensureArtwork(
     }
 }
 
+void MainWindow::ensureNewsArtwork()
+{
+    // Remove only old news artwork. Pack artwork remains cached.
+    for (auto it = imageCache_.begin();
+         it != imageCache_.end();)
+    {
+        if (
+            it->first.rfind(
+                L"news:",
+                0
+            ) == 0
+        )
+        {
+            if (it->second)
+                DeleteObject(
+                    it->second
+                );
+
+            it =
+                imageCache_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    const size_t count =
+        std::min<size_t>(
+            news_.size(),
+            3
+        );
+
+    for (size_t i = 0; i < count; ++i)
+    {
+        const NewsItem& item =
+            news_[i];
+
+        if (item.imageUrl.empty())
+            continue;
+
+        const std::wstring key =
+            L"news:" +
+            item.imageUrl;
+
+        HBITMAP bitmap =
+            ImageLoader::loadFromUrl(
+                item.imageUrl,
+                900,
+                420
+            );
+
+        if (bitmap)
+        {
+            imageCache_[key] =
+                bitmap;
+        }
+    }
+}
+
+void MainWindow::refreshNews()
+{
+    newsStatus_ =
+        L"Loading news...";
+
+    openNewsIndex_ = -1;
+
+    InvalidateRect(
+        hwnd_,
+        nullptr,
+        FALSE
+    );
+
+    UpdateWindow(
+        hwnd_
+    );
+
+    try
+    {
+        news_ =
+            NewsManager::fetch();
+
+        if (news_.empty())
+        {
+            newsStatus_ =
+                L"No news posts are currently published.";
+        }
+        else
+        {
+            newsStatus_ =
+                std::to_wstring(
+                    news_.size()
+                ) +
+                (
+                    news_.size() == 1
+                        ? L" news post available."
+                        : L" news posts available."
+                );
+        }
+
+        ensureNewsArtwork();
+    }
+    catch (const std::exception& error)
+    {
+        news_.clear();
+
+        newsStatus_ =
+            L"Unable to load news from the server.";
+
+        OutputDebugStringA(
+            (
+                std::string(
+                    "[NewtTech] News load failed: "
+                ) +
+                error.what() +
+                "\n"
+            ).c_str()
+        );
+    }
+
+    InvalidateRect(
+        hwnd_,
+        nullptr,
+        FALSE
+    );
+}
+
 void MainWindow::refreshPacks()
 {
     setStatus(
@@ -2484,6 +3847,8 @@ void MainWindow::refreshPacks()
                 AppConfig::INDEX_URL
             )
         );
+
+        refreshNews();
 
         for (
             const Modpack& pack :

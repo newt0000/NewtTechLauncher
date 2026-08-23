@@ -22,12 +22,26 @@ public:
         const PackManifest& manifest
     );
 
+    // Ensures the vanilla Minecraft version JSON/client JAR exist first,
+    // then the pack loader version package can be installed normally.
+    static void ensureMinecraftBaseVersion(
+        const std::wstring& minecraftVersion
+    );
+
+    static bool isMinecraftBaseInstalled(
+        const std::wstring& minecraftVersion
+    );
+
     static bool isInstalled(
         const VersionPackageInfo& package
     );
 
     static void install(
         const VersionPackageInfo& package
+    );
+
+    static VersionPackageInfo ensurePackRuntime(
+        const PackManifest& manifest
     );
 
     static std::wstring minecraftRoot();
