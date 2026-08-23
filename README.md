@@ -141,6 +141,14 @@ The Downloads section provides a dedicated view for launcher-managed download ac
   <img src="assets/screenshots/downloads.png" alt="NewtTech Launcher Downloads page" width="900">
 </p>
 
+### Home & News
+
+The Home & News tab provides a landing spot for viewing updated, feature changes, news and info about the launcher.
+
+<p align="center">
+  <img src="assets/screenshots/homenews.png" alt="NewtTech Launcher Downloads page" width="900">
+</p>
+
 ### Settings
 
 Launcher preferences and configurable behavior are available from the Settings section.
