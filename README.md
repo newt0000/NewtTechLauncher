@@ -495,7 +495,7 @@ See **[LICENSE](LICENSE)** for the complete license terms.
 ---
 
 <p align="center">
-  <img src="assets/launcher-logo.png" alt="NewtTech Launcher" width="96">
+  <img src="assets/icon.png" alt="NewtTech Launcher" width="96">
 </p>
 
 <p align="center">
