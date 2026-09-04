@@ -157,7 +157,7 @@ std::wstring formatNewsDate(
 
 }
 
-constexpr wchar_t LAUNCHER_VERSION[] = L"0.8.4";
+constexpr wchar_t LAUNCHER_VERSION[] = L"0.8.5";
 
 bool MainWindow::create(
     HINSTANCE instance,
