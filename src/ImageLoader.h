@@ -17,4 +17,10 @@ public:
         int maxWidth,
         int maxHeight
     );
+
+    static HBITMAP loadFromFilePreserveAspect(
+        const std::wstring& path,
+        int maxWidth,
+        int maxHeight
+    );
 };

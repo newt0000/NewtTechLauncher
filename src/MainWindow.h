@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -25,6 +26,7 @@ private:
         Home,
         Modpacks,
         Downloads,
+        Media,
         Settings
     };
 
@@ -50,6 +52,31 @@ private:
     };
 
     std::vector<NewsMarkdownLink> newsModalLinks_;
+
+    struct MediaScreenshot
+    {
+        std::filesystem::path path;
+        std::wstring timestamp;
+        std::filesystem::file_time_type modified{};
+        HBITMAP bitmap = nullptr;
+        RECT cardRect{};
+    };
+
+    struct MediaInstance
+    {
+        std::wstring id;
+        std::wstring name;
+        bool expanded = false;
+        std::vector<MediaScreenshot> screenshots;
+        RECT headerRect{};
+    };
+
+    std::vector<MediaInstance> mediaInstances_;
+    int mediaScrollY_ = 0;
+    int mediaContentHeight_ = 0;
+    int mediaOpenInstance_ = -1;
+    int mediaOpenScreenshot_ = -1;
+
     PackManifest currentManifest_;
     int selectedPack_ = -1;
 
@@ -89,6 +116,18 @@ private:
     void paintModpacks(HDC dc, const RECT& client);
     void paintDownloads(HDC dc, const RECT& client);
     void paintSettings(HDC dc, const RECT& client);
+    void paintMedia(HDC dc, const RECT& client);
+    void paintMediaModal(HDC dc, const RECT& client);
+    void refreshMedia();
+    void clearMedia();
+    void setMediaScroll(int value, const RECT& client);
+    int mediaMaxScroll(const RECT& client) const;
+    RECT mediaRefreshRect(const RECT& client) const;
+    RECT mediaModalRect(const RECT& client) const;
+    RECT mediaModalCloseRect(const RECT& client) const;
+    static std::wstring formatMediaTimestamp(
+        const std::filesystem::file_time_type& time
+    );
 
     void paintPackList(HDC dc, const RECT& client);
     void paintPackDetails(HDC dc, const RECT& client);

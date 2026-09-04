@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(NewtTechLauncher
-        VERSION 0.4.0
+        VERSION 0.8.4
         DESCRIPTION "NewtTech Modpack Launcher"
         LANGUAGES C CXX)
 

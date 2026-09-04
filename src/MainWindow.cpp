@@ -16,6 +16,10 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 
 
@@ -336,6 +340,23 @@ LRESULT MainWindow::handleMessage(
         {
             if (
                 wParam == VK_ESCAPE &&
+                mediaOpenInstance_ >= 0
+            )
+            {
+                mediaOpenInstance_ = -1;
+                mediaOpenScreenshot_ = -1;
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
+            if (
+                wParam == VK_ESCAPE &&
                 lowMemoryWarningOpen_
             )
             {
@@ -385,6 +406,37 @@ LRESULT MainWindow::handleMessage(
 
         case WM_MOUSEWHEEL:
         {
+            if (
+                page_ == Page::Media &&
+                mediaOpenInstance_ < 0
+            )
+            {
+                RECT client{};
+                GetClientRect(
+                    hwnd_,
+                    &client
+                );
+                client.bottom -= TITLEBAR_HEIGHT;
+
+                const int notches =
+                    GET_WHEEL_DELTA_WPARAM(wParam) /
+                    WHEEL_DELTA;
+
+                setMediaScroll(
+                    mediaScrollY_ -
+                    notches * 90,
+                    client
+                );
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
             if (
                 page_ == Page::Home &&
                 openNewsIndex_ >= 0
@@ -984,8 +1036,18 @@ LRESULT MainWindow::handleMessage(
 
             if (nav >= 0)
             {
-                page_ =
+                const Page nextPage =
                     static_cast<Page>(nav);
+
+                if (
+                    nextPage == Page::Media &&
+                    page_ != Page::Media
+                )
+                {
+                    refreshMedia();
+                }
+
+                page_ = nextPage;
 
                 InvalidateRect(
                     hwnd_,
@@ -1211,6 +1273,134 @@ LRESULT MainWindow::handleMessage(
                         );
 
                         return 0;
+                    }
+                }
+            }
+
+            if (page_ == Page::Media)
+            {
+                if (
+                    mediaOpenInstance_ >= 0 &&
+                    mediaOpenScreenshot_ >= 0
+                )
+                {
+                    if (
+                        pointInRect(
+                            x,
+                            contentY,
+                            mediaModalCloseRect(
+                                contentClient
+                            )
+                        )
+                    )
+                    {
+                        mediaOpenInstance_ = -1;
+                        mediaOpenScreenshot_ = -1;
+
+                        InvalidateRect(
+                            hwnd_,
+                            nullptr,
+                            FALSE
+                        );
+                    }
+
+                    // Screenshot viewer is modal.
+                    return 0;
+                }
+
+                if (
+                    pointInRect(
+                        x,
+                        contentY,
+                        mediaRefreshRect(
+                            contentClient
+                        )
+                    )
+                )
+                {
+                    refreshMedia();
+
+                    InvalidateRect(
+                        hwnd_,
+                        nullptr,
+                        FALSE
+                    );
+
+                    return 0;
+                }
+
+                const int virtualY =
+                    contentY +
+                    mediaScrollY_;
+
+                for (
+                    int instanceIndex = 0;
+                    instanceIndex <
+                        static_cast<int>(
+                            mediaInstances_.size()
+                        );
+                    ++instanceIndex
+                )
+                {
+                    MediaInstance& instance =
+                        mediaInstances_[instanceIndex];
+
+                    if (
+                        pointInRect(
+                            x,
+                            virtualY,
+                            instance.headerRect
+                        )
+                    )
+                    {
+                        instance.expanded =
+                            !instance.expanded;
+
+                        InvalidateRect(
+                            hwnd_,
+                            nullptr,
+                            FALSE
+                        );
+
+                        return 0;
+                    }
+
+                    if (!instance.expanded)
+                        continue;
+
+                    for (
+                        int shotIndex = 0;
+                        shotIndex <
+                            static_cast<int>(
+                                instance.screenshots.size()
+                            );
+                        ++shotIndex
+                    )
+                    {
+                        if (
+                            pointInRect(
+                                x,
+                                virtualY,
+                                instance
+                                    .screenshots[shotIndex]
+                                    .cardRect
+                            )
+                        )
+                        {
+                            mediaOpenInstance_ =
+                                instanceIndex;
+
+                            mediaOpenScreenshot_ =
+                                shotIndex;
+
+                            InvalidateRect(
+                                hwnd_,
+                                nullptr,
+                                FALSE
+                            );
+
+                            return 0;
+                        }
                     }
                 }
             }
@@ -1790,6 +1980,24 @@ void MainWindow::paint(HDC dc)
             );
             break;
 
+        case Page::Media:
+            paintMedia(
+                memory,
+                content
+            );
+
+            if (
+                mediaOpenInstance_ >= 0 &&
+                mediaOpenScreenshot_ >= 0
+            )
+            {
+                paintMediaModal(
+                    memory,
+                    content
+                );
+            }
+            break;
+
         case Page::Settings:
             paintSettings(
                 memory,
@@ -1894,10 +2102,11 @@ void MainWindow::paintSidebar(
         L"Home",
         L"Modpacks",
         L"Downloads",
+        L"Media",
         L"Settings"
     };
 
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 5; ++i)
     {
         RECT row{
             7,
@@ -4407,6 +4616,948 @@ void MainWindow::paintDownloads(
     );
 }
 
+
+void MainWindow::clearMedia()
+{
+    for (MediaInstance& instance : mediaInstances_)
+    {
+        for (MediaScreenshot& shot : instance.screenshots)
+        {
+            if (shot.bitmap)
+            {
+                DeleteObject(shot.bitmap);
+                shot.bitmap = nullptr;
+            }
+        }
+    }
+
+    mediaInstances_.clear();
+    mediaOpenInstance_ = -1;
+    mediaOpenScreenshot_ = -1;
+    mediaScrollY_ = 0;
+    mediaContentHeight_ = 0;
+}
+
+std::wstring MainWindow::formatMediaTimestamp(
+    const std::filesystem::file_time_type& time)
+{
+    try
+    {
+        const auto systemTime =
+            std::chrono::time_point_cast<
+                std::chrono::system_clock::duration
+            >(
+                time -
+                std::filesystem::file_time_type::clock::now() +
+                std::chrono::system_clock::now()
+            );
+
+        const std::time_t raw =
+            std::chrono::system_clock::to_time_t(
+                systemTime
+            );
+
+        std::tm local{};
+
+        localtime_s(
+            &local,
+            &raw
+        );
+
+        std::wostringstream stream;
+        stream <<
+            std::put_time(
+                &local,
+                L"%I:%M %p %m/%d/%Y"
+            );
+
+        std::wstring result =
+            stream.str();
+
+        if (
+            result.size() > 1 &&
+            result[0] == L'0'
+        )
+        {
+            result.erase(
+                result.begin()
+            );
+        }
+
+        return result;
+    }
+    catch (...)
+    {
+        return L"Unknown date";
+    }
+}
+
+void MainWindow::refreshMedia()
+{
+    // Preserve collapsed/expanded choices across a refresh.
+    std::unordered_map<std::wstring, bool>
+        expanded;
+
+    for (const MediaInstance& item : mediaInstances_)
+        expanded[item.id] = item.expanded;
+
+    clearMedia();
+
+    for (const Modpack& pack : packs_)
+    {
+        const std::filesystem::path instanceRoot(
+            InstallEngine::packInstanceRoot(
+                settings_.installRoot,
+                pack.id
+            )
+        );
+
+        const std::filesystem::path screenshots =
+            instanceRoot /
+            L"screenshots";
+
+        std::error_code error;
+
+        if (
+            !std::filesystem::exists(
+                screenshots,
+                error
+            ) ||
+            !std::filesystem::is_directory(
+                screenshots,
+                error
+            )
+        )
+        {
+            continue;
+        }
+
+        MediaInstance instance;
+        instance.id = pack.id;
+        instance.name =
+            pack.name.empty()
+                ? pack.id
+                : pack.name;
+
+        auto expandedIt =
+            expanded.find(
+                instance.id
+            );
+
+        instance.expanded =
+            expandedIt != expanded.end()
+                ? expandedIt->second
+                : false;
+
+        for (
+            const auto& entry :
+            std::filesystem::directory_iterator(
+                screenshots,
+                error
+            )
+        )
+        {
+            if (
+                error ||
+                !entry.is_regular_file()
+            )
+            {
+                continue;
+            }
+
+            std::wstring extension =
+                entry.path()
+                    .extension()
+                    .wstring();
+
+            std::transform(
+                extension.begin(),
+                extension.end(),
+                extension.begin(),
+                [](wchar_t c)
+                {
+                    return
+                        static_cast<wchar_t>(
+                            towlower(c)
+                        );
+                }
+            );
+
+            if (
+                extension != L".png" &&
+                extension != L".jpg" &&
+                extension != L".jpeg"
+            )
+            {
+                continue;
+            }
+
+            MediaScreenshot shot;
+            shot.path = entry.path();
+            shot.modified =
+                entry.last_write_time(
+                    error
+                );
+
+            if (error)
+            {
+                error.clear();
+                continue;
+            }
+
+            shot.timestamp =
+                formatMediaTimestamp(
+                    shot.modified
+                );
+
+            instance.screenshots.push_back(
+                std::move(shot)
+            );
+        }
+
+        if (instance.screenshots.empty())
+            continue;
+
+        std::sort(
+            instance.screenshots.begin(),
+            instance.screenshots.end(),
+            [](
+                const MediaScreenshot& a,
+                const MediaScreenshot& b)
+            {
+                return
+                    a.modified >
+                    b.modified;
+            }
+        );
+
+        mediaInstances_.push_back(
+            std::move(instance)
+        );
+    }
+
+    // Packs with the newest screenshot appear first.
+    std::sort(
+        mediaInstances_.begin(),
+        mediaInstances_.end(),
+        [](
+            const MediaInstance& a,
+            const MediaInstance& b)
+        {
+            return
+                a.screenshots.front().modified >
+                b.screenshots.front().modified;
+        }
+    );
+}
+
+RECT MainWindow::mediaRefreshRect(
+    const RECT& client) const
+{
+    return RECT{
+        client.right - 154,
+        34,
+        client.right - 34,
+        74
+    };
+}
+
+int MainWindow::mediaMaxScroll(
+    const RECT& client) const
+{
+    return
+        std::max(
+            0,
+            mediaContentHeight_ -
+            static_cast<int>(
+                client.bottom - 92
+            )
+        );
+}
+
+void MainWindow::setMediaScroll(
+    int value,
+    const RECT& client)
+{
+    mediaScrollY_ =
+        std::clamp(
+            value,
+            0,
+            mediaMaxScroll(client)
+        );
+}
+
+RECT MainWindow::mediaModalRect(
+    const RECT& client) const
+{
+    const LONG width =
+        std::max<LONG>(
+            520L,
+            std::min<LONG>(
+                1050L,
+                client.right - 300
+            )
+        );
+
+    const LONG height =
+        std::max<LONG>(
+            420L,
+            std::min<LONG>(
+                760L,
+                client.bottom - 80
+            )
+        );
+
+    const LONG left =
+        220 +
+        std::max<LONG>(
+            24L,
+            (
+                client.right -
+                220 -
+                width
+            ) / 2
+        );
+
+    const LONG top =
+        std::max<LONG>(
+            24L,
+            (
+                client.bottom -
+                height
+            ) / 2
+        );
+
+    return RECT{
+        left,
+        top,
+        left + width,
+        top + height
+    };
+}
+
+RECT MainWindow::mediaModalCloseRect(
+    const RECT& client) const
+{
+    const RECT modal =
+        mediaModalRect(client);
+
+    return RECT{
+        modal.right - 112,
+        modal.top + 16,
+        modal.right - 24,
+        modal.top + 50
+    };
+}
+
+void MainWindow::paintMedia(
+    HDC dc,
+    const RECT& client)
+{
+    drawTextSimple(
+        dc,
+        L"MEDIA",
+        RECT{
+            250,
+            30,
+            client.right - 180,
+            65
+        },
+        fontTitle_,
+        TEXT,
+        DT_LEFT |
+        DT_SINGLELINE
+    );
+
+    drawTextSimple(
+        dc,
+        L"Browse screenshots captured in your modpack instances.",
+        RECT{
+            250,
+            65,
+            client.right - 190,
+            88
+        },
+        fontSmall_,
+        MUTED,
+        DT_LEFT |
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    const RECT refresh =
+        mediaRefreshRect(client);
+
+    fillRectColor(
+        dc,
+        refresh,
+        CARD
+    );
+
+    drawTextSimple(
+        dc,
+        L"Refresh",
+        refresh,
+        fontNormal_,
+        CYAN,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    const int saved =
+        SaveDC(dc);
+
+    IntersectClipRect(
+        dc,
+        220,
+        96,
+        client.right,
+        client.bottom
+    );
+
+    OffsetViewportOrgEx(
+        dc,
+        0,
+        -mediaScrollY_,
+        nullptr
+    );
+
+    LONG y = 110;
+
+    if (mediaInstances_.empty())
+    {
+        drawTextSimple(
+            dc,
+            L"No screenshots found yet.",
+            RECT{
+                250,
+                y + 20,
+                client.right - 40,
+                y + 52
+            },
+            fontNormal_,
+            MUTED,
+            DT_LEFT |
+            DT_SINGLELINE
+        );
+
+        drawTextSimple(
+            dc,
+            L"Minecraft screenshots will appear here after they are saved in an installed pack's screenshots folder.",
+            RECT{
+                250,
+                y + 58,
+                client.right - 60,
+                y + 110
+            },
+            fontSmall_,
+            MUTED,
+            DT_LEFT |
+            DT_WORDBREAK
+        );
+
+        mediaContentHeight_ = 210;
+    }
+    else
+    {
+        const LONG left = 250;
+        const LONG right =
+            client.right - 38;
+
+        const LONG gap = 16;
+        const LONG minimumCardWidth = 220;
+
+        const LONG available =
+            std::max<LONG>(
+                minimumCardWidth,
+                right - left
+            );
+
+        int columns =
+            static_cast<int>(
+                (
+                    available + gap
+                ) /
+                (
+                    minimumCardWidth + gap
+                )
+            );
+
+        columns =
+            std::clamp(
+                columns,
+                1,
+                4
+            );
+
+        const LONG cardWidth =
+            (
+                available -
+                gap * (columns - 1)
+            ) /
+            columns;
+
+        const LONG imageHeight =
+            std::max<LONG>(
+                125L,
+                cardWidth * 9 / 16
+            );
+
+        const LONG cardHeight =
+            imageHeight + 38;
+
+        for (MediaInstance& instance : mediaInstances_)
+        {
+            instance.headerRect =
+                RECT{
+                    left,
+                    y,
+                    right,
+                    y + 52
+                };
+
+            fillRectColor(
+                dc,
+                instance.headerRect,
+                CARD
+            );
+
+            fillRectColor(
+                dc,
+                RECT{
+                    left,
+                    y,
+                    left + 4,
+                    y + 52
+                },
+                instance.expanded
+                    ? ACCENT
+                    : BORDER
+            );
+
+            drawTextSimple(
+                dc,
+                instance.expanded
+                    ? L"▼"
+                    : L"▶",
+                RECT{
+                    left + 16,
+                    y,
+                    left + 42,
+                    y + 52
+                },
+                fontNormal_,
+                CYAN,
+                DT_LEFT |
+                DT_VCENTER |
+                DT_SINGLELINE
+            );
+
+            drawTextSimple(
+                dc,
+                instance.name,
+                RECT{
+                    left + 46,
+                    y,
+                    right - 180,
+                    y + 52
+                },
+                fontNormal_,
+                TEXT,
+                DT_LEFT |
+                DT_VCENTER |
+                DT_SINGLELINE |
+                DT_END_ELLIPSIS
+            );
+
+            const std::wstring count =
+                std::to_wstring(
+                    instance.screenshots.size()
+                ) +
+                (
+                    instance.screenshots.size() == 1
+                        ? L" screenshot"
+                        : L" screenshots"
+                );
+
+            drawTextSimple(
+                dc,
+                count,
+                RECT{
+                    right - 170,
+                    y,
+                    right - 18,
+                    y + 52
+                },
+                fontSmall_,
+                MUTED,
+                DT_RIGHT |
+                DT_VCENTER |
+                DT_SINGLELINE
+            );
+
+            y += 66;
+
+            if (!instance.expanded)
+                continue;
+
+            for (
+                size_t i = 0;
+                i < instance.screenshots.size();
+                ++i
+            )
+            {
+                MediaScreenshot& shot =
+                    instance.screenshots[i];
+
+                const int column =
+                    static_cast<int>(
+                        i % columns
+                    );
+
+                const int row =
+                    static_cast<int>(
+                        i / columns
+                    );
+
+                const LONG x =
+                    left +
+                    column *
+                    (
+                        cardWidth + gap
+                    );
+
+                const LONG cardTop =
+                    y +
+                    row *
+                    (
+                        cardHeight + gap
+                    );
+
+                shot.cardRect =
+                    RECT{
+                        x,
+                        cardTop,
+                        x + cardWidth,
+                        cardTop + cardHeight
+                    };
+
+                fillRectColor(
+                    dc,
+                    shot.cardRect,
+                    CARD
+                );
+
+                const RECT imageRect{
+                    x + 6,
+                    cardTop + 6,
+                    x + cardWidth - 6,
+                    cardTop + imageHeight - 2
+                };
+
+                fillRectColor(
+                    dc,
+                    imageRect,
+                    BG
+                );
+
+                if (!shot.bitmap)
+                {
+                    shot.bitmap =
+                        ImageLoader::
+                            loadFromFilePreserveAspect(
+                                shot.path.wstring(),
+                                640,
+                                360
+                            );
+                }
+
+                if (shot.bitmap)
+                {
+                    drawBitmapFit(
+                        dc,
+                        shot.bitmap,
+                        imageRect
+                    );
+                }
+
+                drawTextSimple(
+                    dc,
+                    shot.timestamp,
+                    RECT{
+                        x + 10,
+                        cardTop + imageHeight + 2,
+                        x + cardWidth - 10,
+                        cardTop + cardHeight - 4
+                    },
+                    fontMeta_,
+                    MUTED,
+                    DT_RIGHT |
+                    DT_VCENTER |
+                    DT_SINGLELINE
+                );
+            }
+
+            const size_t rows =
+                (
+                    instance.screenshots.size() +
+                    static_cast<size_t>(
+                        columns
+                    ) -
+                    1
+                ) /
+                static_cast<size_t>(
+                    columns
+                );
+
+            y +=
+                static_cast<LONG>(
+                    rows
+                ) *
+                (
+                    cardHeight + gap
+                ) +
+                8;
+        }
+
+        mediaContentHeight_ =
+            static_cast<int>(
+                y + 30
+            );
+    }
+
+    RestoreDC(
+        dc,
+        saved
+    );
+
+    setMediaScroll(
+        mediaScrollY_,
+        client
+    );
+
+    if (mediaMaxScroll(client) > 0)
+    {
+        const LONG trackTop = 106;
+        const LONG trackBottom =
+            client.bottom - 18;
+
+        fillRectColor(
+            dc,
+            RECT{
+                client.right - 14,
+                trackTop,
+                client.right - 8,
+                trackBottom
+            },
+            BORDER
+        );
+
+        const LONG trackHeight =
+            trackBottom - trackTop;
+
+        const LONG visibleHeight =
+            std::max<LONG>(
+                1L,
+                client.bottom - 106
+            );
+
+        LONG thumbHeight =
+            std::max<LONG>(
+                40L,
+                trackHeight *
+                visibleHeight /
+                std::max<LONG>(
+                    visibleHeight,
+                    mediaContentHeight_
+                )
+            );
+
+        const LONG usable =
+            std::max<LONG>(
+                1L,
+                trackHeight -
+                thumbHeight
+            );
+
+        const LONG thumbTop =
+            trackTop +
+            usable *
+            mediaScrollY_ /
+            std::max(
+                1,
+                mediaMaxScroll(client)
+            );
+
+        fillRectColor(
+            dc,
+            RECT{
+                client.right - 15,
+                thumbTop,
+                client.right - 7,
+                thumbTop + thumbHeight
+            },
+            CYAN
+        );
+    }
+}
+
+void MainWindow::paintMediaModal(
+    HDC dc,
+    const RECT& client)
+{
+    if (
+        mediaOpenInstance_ < 0 ||
+        mediaOpenInstance_ >=
+            static_cast<int>(
+                mediaInstances_.size()
+            )
+    )
+    {
+        return;
+    }
+
+    MediaInstance& instance =
+        mediaInstances_[
+            mediaOpenInstance_
+        ];
+
+    if (
+        mediaOpenScreenshot_ < 0 ||
+        mediaOpenScreenshot_ >=
+            static_cast<int>(
+                instance.screenshots.size()
+            )
+    )
+    {
+        return;
+    }
+
+    MediaScreenshot& shot =
+        instance.screenshots[
+            mediaOpenScreenshot_
+        ];
+
+    // Opaque dark overlay consistent with the launcher's other custom modals.
+    fillRectColor(
+        dc,
+        RECT{
+            220,
+            0,
+            client.right,
+            client.bottom
+        },
+        RGB(3, 7, 18)
+    );
+
+    const RECT modal =
+        mediaModalRect(client);
+
+    fillRectColor(
+        dc,
+        modal,
+        CARD
+    );
+
+    fillRectColor(
+        dc,
+        RECT{
+            modal.left,
+            modal.top,
+            modal.left + 5,
+            modal.bottom
+        },
+        ACCENT
+    );
+
+    drawTextSimple(
+        dc,
+        instance.name,
+        RECT{
+            modal.left + 28,
+            modal.top + 16,
+            modal.right - 130,
+            modal.top + 50
+        },
+        fontTitle_,
+        TEXT,
+        DT_LEFT |
+        DT_VCENTER |
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    const RECT close =
+        mediaModalCloseRect(client);
+
+    fillRectColor(
+        dc,
+        close,
+        PANEL
+    );
+
+    drawTextSimple(
+        dc,
+        L"Close",
+        close,
+        fontNormal_,
+        CYAN,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    const RECT imageArea{
+        modal.left + 28,
+        modal.top + 70,
+        modal.right - 28,
+        modal.bottom - 58
+    };
+
+    fillRectColor(
+        dc,
+        imageArea,
+        BG
+    );
+
+    if (!shot.bitmap)
+    {
+        shot.bitmap =
+            ImageLoader::
+                loadFromFilePreserveAspect(
+                    shot.path.wstring(),
+                    1600,
+                    1000
+                );
+    }
+
+    if (shot.bitmap)
+    {
+        drawBitmapFit(
+            dc,
+            shot.bitmap,
+            imageArea
+        );
+    }
+
+    drawTextSimple(
+        dc,
+        shot.timestamp,
+        RECT{
+            modal.left + 28,
+            modal.bottom - 48,
+            modal.right - 28,
+            modal.bottom - 18
+        },
+        fontSmall_,
+        MUTED,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+}
+
 void MainWindow::paintSettings(
     HDC dc,
     const RECT& client)
@@ -6829,7 +7980,7 @@ int MainWindow::hitTestSidebar(
 
     for (
         int i = 0;
-        i < 4;
+        i < 5;
         ++i
     )
     {

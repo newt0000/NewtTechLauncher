@@ -149,6 +149,12 @@ The Home & News tab provides a landing spot for viewing updated, feature changes
   <img src="assets/screenshots/homenews.png" alt="NewtTech Launcher Downloads page" width="900">
 </p>
 
+### Media
+
+the media tab is used to see ingame screenshots in collapsable tab sections for each pack instance
+<p align="center">
+  <img src="assets/screenshots/media.png" alt="media tab" width="900">
+</p>
 ### Settings
 
 Launcher preferences and configurable behavior are available from the Settings section.

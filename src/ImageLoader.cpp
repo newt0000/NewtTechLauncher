@@ -406,3 +406,248 @@ HBITMAP ImageLoader::loadFromUrlPreserveAspect(
 
     return bitmap;
 }
+
+
+HBITMAP ImageLoader::loadFromFilePreserveAspect(
+    const std::wstring& path,
+    int maxWidth,
+    int maxHeight)
+{
+    if (
+        path.empty() ||
+        maxWidth <= 0 ||
+        maxHeight <= 0
+    )
+    {
+        return nullptr;
+    }
+
+    HRESULT hr = S_OK;
+
+    IWICImagingFactory* factory = nullptr;
+    IWICBitmapDecoder* decoder = nullptr;
+    IWICBitmapFrameDecode* frame = nullptr;
+    IWICBitmapScaler* scaler = nullptr;
+    IWICFormatConverter* converter = nullptr;
+
+    HBITMAP bitmap = nullptr;
+
+    hr = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory)
+    );
+
+    if (SUCCEEDED(hr))
+    {
+        hr = factory->CreateDecoderFromFilename(
+            path.c_str(),
+            nullptr,
+            GENERIC_READ,
+            WICDecodeMetadataCacheOnLoad,
+            &decoder
+        );
+    }
+
+    if (SUCCEEDED(hr))
+        hr = decoder->GetFrame(0, &frame);
+
+    UINT sourceWidth = 0;
+    UINT sourceHeight = 0;
+
+    if (SUCCEEDED(hr))
+    {
+        hr = frame->GetSize(
+            &sourceWidth,
+            &sourceHeight
+        );
+    }
+
+    if (
+        SUCCEEDED(hr) &&
+        (
+            sourceWidth == 0 ||
+            sourceHeight == 0
+        )
+    )
+    {
+        hr = E_FAIL;
+    }
+
+    UINT outputWidth = sourceWidth;
+    UINT outputHeight = sourceHeight;
+
+    if (SUCCEEDED(hr))
+    {
+        /*
+            Scale DOWN only as much as necessary to fit inside the requested
+            bounding box. The same scale factor is applied to both axes, so
+            the decoded bitmap keeps the exact source aspect ratio.
+        */
+        const double widthScale =
+            static_cast<double>(maxWidth) /
+            static_cast<double>(sourceWidth);
+
+        const double heightScale =
+            static_cast<double>(maxHeight) /
+            static_cast<double>(sourceHeight);
+
+        double scale =
+            widthScale < heightScale
+                ? widthScale
+                : heightScale;
+
+        /*
+            Do not unnecessarily upscale the cached bitmap here. Rendering
+            can enlarge it later while still keeping the correct proportions.
+        */
+        if (scale > 1.0)
+            scale = 1.0;
+
+        outputWidth =
+            static_cast<UINT>(
+                static_cast<double>(sourceWidth) *
+                scale
+            );
+
+        outputHeight =
+            static_cast<UINT>(
+                static_cast<double>(sourceHeight) *
+                scale
+            );
+
+        if (outputWidth == 0)
+            outputWidth = 1;
+
+        if (outputHeight == 0)
+            outputHeight = 1;
+    }
+
+    IWICBitmapSource* sourceForConvert = frame;
+
+    if (
+        SUCCEEDED(hr) &&
+        (
+            outputWidth != sourceWidth ||
+            outputHeight != sourceHeight
+        )
+    )
+    {
+        hr = factory->CreateBitmapScaler(
+            &scaler
+        );
+
+        if (SUCCEEDED(hr))
+        {
+            hr = scaler->Initialize(
+                frame,
+                outputWidth,
+                outputHeight,
+                WICBitmapInterpolationModeFant
+            );
+        }
+
+        if (SUCCEEDED(hr))
+            sourceForConvert = scaler;
+    }
+
+    if (SUCCEEDED(hr))
+    {
+        hr = factory->CreateFormatConverter(
+            &converter
+        );
+    }
+
+    if (SUCCEEDED(hr))
+    {
+        hr = converter->Initialize(
+            sourceForConvert,
+            GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeCustom
+        );
+    }
+
+    if (SUCCEEDED(hr))
+    {
+        BITMAPINFO bmi{};
+        bmi.bmiHeader.biSize =
+            sizeof(BITMAPINFOHEADER);
+
+        bmi.bmiHeader.biWidth =
+            static_cast<LONG>(outputWidth);
+
+        bmi.bmiHeader.biHeight =
+            -static_cast<LONG>(outputHeight);
+
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        void* bits = nullptr;
+
+        HDC screen =
+            GetDC(nullptr);
+
+        bitmap =
+            CreateDIBSection(
+                screen,
+                &bmi,
+                DIB_RGB_COLORS,
+                &bits,
+                nullptr,
+                0
+            );
+
+        ReleaseDC(
+            nullptr,
+            screen
+        );
+
+        if (
+            bitmap &&
+            bits
+        )
+        {
+            const UINT stride =
+                outputWidth * 4;
+
+            const UINT size =
+                stride *
+                outputHeight;
+
+            hr = converter->CopyPixels(
+                nullptr,
+                stride,
+                size,
+                static_cast<BYTE*>(bits)
+            );
+
+            if (FAILED(hr))
+            {
+                DeleteObject(bitmap);
+                bitmap = nullptr;
+            }
+        }
+    }
+
+    if (converter)
+        converter->Release();
+
+    if (scaler)
+        scaler->Release();
+
+    if (frame)
+        frame->Release();
+
+    if (decoder)
+        decoder->Release();
+
+    if (factory)
+        factory->Release();
+
+    return bitmap;
+}
