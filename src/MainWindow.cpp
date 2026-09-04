@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "ServersDat.h"
 
 #include "AppConfig.h"
 #include "HttpClient.h"
@@ -5791,6 +5792,27 @@ void MainWindow::launchCurrentPack()
 {
     try
     {
+        /*
+            Keep the managed multiplayer server synchronized at Play time too.
+            This means a deleted/missing servers.dat is restored simply by
+            pressing Play; Install or Verify/Repair is not required.
+        */
+        if (!currentManifest_.server.address.empty())
+        {
+            const std::filesystem::path instancePath(
+                InstallEngine::packInstanceRoot(
+                    settings_.installRoot,
+                    currentManifest_.id
+                )
+            );
+
+            ServersDat::writeManagedServer(
+                instancePath,
+                currentManifest_.name,
+                currentManifest_.server.address
+            );
+        }
+
         setStatus(
             L"Preparing Minecraft " +
             currentManifest_.minecraft.version +

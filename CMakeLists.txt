@@ -23,6 +23,8 @@ add_executable(NewtTechLauncher WIN32
         src/Settings.cpp
         src/InstallEngine.h
         src/InstallEngine.cpp
+        src/ServersDat.h
+        src/ServersDat.cpp
         src/MinecraftProfile.h
         src/MinecraftProfile.cpp
         src/VersionManager.h

@@ -1,4 +1,5 @@
 #include "InstallEngine.h"
+#include "ServersDat.h"
 
 #include "HttpClient.h"
 
@@ -267,6 +268,25 @@ void InstallEngine::installOrRepair(
 
         if (callback)
             callback(progress);
+    }
+
+    /*
+        Keep Minecraft's multiplayer list synchronized with the single server
+        associated with this pack. This runs for both Install and Verify/Repair.
+    */
+    if (!manifest.server.address.empty())
+    {
+        progress.detail =
+            L"Configuring multiplayer server";
+
+        if (callback)
+            callback(progress);
+
+        ServersDat::writeManagedServer(
+            root,
+            manifest.name,
+            manifest.server.address
+        );
     }
 
     // Save a tiny local instance marker.
