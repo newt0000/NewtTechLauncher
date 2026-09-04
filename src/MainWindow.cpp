@@ -335,6 +335,22 @@ LRESULT MainWindow::handleMessage(
         {
             if (
                 wParam == VK_ESCAPE &&
+                lowMemoryWarningOpen_
+            )
+            {
+                lowMemoryWarningOpen_ = false;
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
+            if (
+                wParam == VK_ESCAPE &&
                 openNewsIndex_ >= 0
             )
             {
@@ -894,6 +910,71 @@ LRESULT MainWindow::handleMessage(
             if (contentY < 0)
                 return 0;
 
+            /*
+                The low-memory warning is application-modal.  Handle it before
+                sidebar navigation so clicks cannot leak through to the page
+                behind the warning.
+            */
+            if (lowMemoryWarningOpen_)
+            {
+                RECT modalClient{};
+                GetClientRect(
+                    hwnd_,
+                    &modalClient
+                );
+
+                modalClient.bottom -=
+                    TITLEBAR_HEIGHT;
+
+                if (
+                    pointInRect(
+                        x,
+                        contentY,
+                        lowMemoryProceedRect(
+                            modalClient
+                        )
+                    )
+                )
+                {
+                    lowMemoryWarningOpen_ = false;
+
+                    InvalidateRect(
+                        hwnd_,
+                        nullptr,
+                        FALSE
+                    );
+
+                    // Explicit user override applies to this launch only.
+                    launchCurrentPack();
+                    return 0;
+                }
+
+                if (
+                    pointInRect(
+                        x,
+                        contentY,
+                        lowMemoryChangeRect(
+                            modalClient
+                        )
+                    )
+                )
+                {
+                    lowMemoryWarningOpen_ = false;
+                    page_ = Page::Settings;
+
+                    InvalidateRect(
+                        hwnd_,
+                        nullptr,
+                        FALSE
+                    );
+
+                    return 0;
+                }
+
+                // Ignore all other clicks while the warning is open.
+                return 0;
+            }
+
             const int nav =
                 hitTestSidebar(
                     x,
@@ -1025,63 +1106,20 @@ LRESULT MainWindow::handleMessage(
                 {
                     if (currentPackInstalled())
                     {
-                        try
+                        if (shouldWarnAboutMemory())
                         {
-                            setStatus(
-                                L"Preparing Minecraft " +
-                                currentManifest_.minecraft.version +
-                                L" + " +
-                                currentManifest_.minecraft.loader +
-                                L" " +
-                                currentManifest_.minecraft.loaderVersion +
-                                L"..."
+                            lowMemoryWarningOpen_ = true;
+
+                            InvalidateRect(
+                                hwnd_,
+                                nullptr,
+                                FALSE
                             );
 
-                            const VersionPackageInfo version =
-                                VersionManager::ensurePackRuntime(
-                                    currentManifest_
-                                );
-
-                            const std::wstring iconUrl =
-                                (
-                                    selectedPack_ >= 0 &&
-                                    selectedPack_ < static_cast<int>(packs_.size())
-                                )
-                                    ? packs_[selectedPack_].iconUrl
-                                    : L"";
-
-                            if (!MinecraftProfile::createOrUpdate(
-                                    currentManifest_,
-                                    version,
-                                    settings_.installRoot,
-                                    iconUrl,
-                                    settings_.memoryMb))
-                            {
-                                setError(
-                                    L"The Minecraft Java installation profile could not be created."
-                                );
-                                return 0;
-                            }
-
-                            setStatus(
-                                L"Java profile ready • " +
-                                version.versionId
-                            );
-
-                            if (!MinecraftProfile::openOfficialLauncher())
-                            {
-                                setError(
-                                    L"The profile was created, but the official Minecraft Launcher could not be opened."
-                                );
-                            }
+                            return 0;
                         }
-                        catch (const std::exception& error)
-                        {
-                            setError(
-                                L"Unable to prepare Minecraft Java profile.\n\n" +
-                                utf8ToWide(error.what())
-                            );
-                        }
+
+                        launchCurrentPack();
                     }
                     else
                     {
@@ -1757,6 +1795,14 @@ void MainWindow::paint(HDC dc)
                 content
             );
             break;
+    }
+
+    if (lowMemoryWarningOpen_)
+    {
+        paintLowMemoryWarning(
+            memory,
+            content
+        );
     }
 
     RestoreDC(
@@ -5713,6 +5759,371 @@ void MainWindow::startInstallOrRepair()
         FALSE
     );
 }
+
+
+bool MainWindow::shouldWarnAboutMemory() const
+{
+    int recommendedMb =
+        currentManifest_.java.recommendedMemory;
+
+    /*
+        Pack manifests created by the current admin panel store the human
+        recommendation as GB (for example 12), while older/alternate manifests
+        may store it as MB (for example 12288).
+
+        Launcher Settings always stores memoryMb in MB, so normalize the
+        manifest value before comparing them.
+    */
+    if (
+        recommendedMb > 0 &&
+        recommendedMb <= 64
+    )
+    {
+        recommendedMb *= 1024;
+    }
+
+    return
+        recommendedMb > 0 &&
+        settings_.memoryMb < recommendedMb;
+}
+
+void MainWindow::launchCurrentPack()
+{
+    try
+    {
+        setStatus(
+            L"Preparing Minecraft " +
+            currentManifest_.minecraft.version +
+            L" + " +
+            currentManifest_.minecraft.loader +
+            L" " +
+            currentManifest_.minecraft.loaderVersion +
+            L"..."
+        );
+
+        const VersionPackageInfo version =
+            VersionManager::ensurePackRuntime(
+                currentManifest_
+            );
+
+        const std::wstring iconUrl =
+            (
+                selectedPack_ >= 0 &&
+                selectedPack_ <
+                    static_cast<int>(
+                        packs_.size()
+                    )
+            )
+                ? packs_[selectedPack_].iconUrl
+                : L"";
+
+        if (!MinecraftProfile::createOrUpdate(
+                currentManifest_,
+                version,
+                settings_.installRoot,
+                iconUrl,
+                settings_.memoryMb))
+        {
+            setError(
+                L"The Minecraft Java installation profile could not be created."
+            );
+            return;
+        }
+
+        setStatus(
+            L"Java profile ready • " +
+            version.versionId
+        );
+
+        if (!MinecraftProfile::openOfficialLauncher())
+        {
+            setError(
+                L"The profile was created, but the official Minecraft Launcher could not be opened."
+            );
+        }
+    }
+    catch (const std::exception& error)
+    {
+        setError(
+            L"Unable to prepare Minecraft Java profile.\n\n" +
+            utf8ToWide(error.what())
+        );
+    }
+}
+
+RECT MainWindow::lowMemoryModalRect(
+    const RECT& client) const
+{
+    const LONG availableWidth =
+        std::max<LONG>(
+            360L,
+            client.right - 220
+        );
+
+    const LONG width =
+        std::min<LONG>(
+            620L,
+            availableWidth - 48
+        );
+
+    const LONG height = 360;
+
+    const LONG left =
+        220 +
+        std::max<LONG>(
+            24L,
+            (
+                availableWidth -
+                width
+            ) / 2
+        );
+
+    const LONG top =
+        std::max<LONG>(
+            30L,
+            (
+                client.bottom -
+                height
+            ) / 2
+        );
+
+    return RECT{
+        left,
+        top,
+        left + width,
+        top + height
+    };
+}
+
+RECT MainWindow::lowMemoryProceedRect(
+    const RECT& client) const
+{
+    const RECT modal =
+        lowMemoryModalRect(client);
+
+    return RECT{
+        modal.left + 28,
+        modal.bottom - 70,
+        modal.left + 238,
+        modal.bottom - 26
+    };
+}
+
+RECT MainWindow::lowMemoryChangeRect(
+    const RECT& client) const
+{
+    const RECT modal =
+        lowMemoryModalRect(client);
+
+    return RECT{
+        modal.right - 238,
+        modal.bottom - 70,
+        modal.right - 28,
+        modal.bottom - 26
+    };
+}
+
+void MainWindow::paintLowMemoryWarning(
+    HDC dc,
+    const RECT& client)
+{
+    // Darken the page behind the warning.
+    fillRectColor(
+        dc,
+        RECT{
+            220,
+            0,
+            client.right,
+            client.bottom
+        },
+        RGB(3, 7, 18)
+    );
+
+    const RECT modal =
+        lowMemoryModalRect(client);
+
+    fillRectColor(
+        dc,
+        modal,
+        CARD
+    );
+
+    // NewtTech accent rail.
+    fillRectColor(
+        dc,
+        RECT{
+            modal.left,
+            modal.top,
+            modal.left + 5,
+            modal.bottom
+        },
+        ACCENT
+    );
+
+    // Header separator.
+    fillRectColor(
+        dc,
+        RECT{
+            modal.left + 5,
+            modal.top + 68,
+            modal.right,
+            modal.top + 69
+        },
+        BORDER
+    );
+
+    drawTextSimple(
+        dc,
+        L"LOW MEMORY ALLOCATION",
+        RECT{
+            modal.left + 28,
+            modal.top + 20,
+            modal.right - 28,
+            modal.top + 54
+        },
+        fontTitle_,
+        ACCENT,
+        DT_LEFT |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    int recommendedMb =
+        currentManifest_.java.recommendedMemory;
+
+    if (
+        recommendedMb > 0 &&
+        recommendedMb <= 64
+    )
+    {
+        recommendedMb *= 1024;
+    }
+
+    const int currentMb =
+        settings_.memoryMb;
+
+    const double recommendedGb =
+        static_cast<double>(
+            recommendedMb
+        ) / 1024.0;
+
+    const double currentGb =
+        static_cast<double>(
+            currentMb
+        ) / 1024.0;
+
+    auto memoryLabel =
+        [](double gb) -> std::wstring
+        {
+            const int whole =
+                static_cast<int>(gb);
+
+            if (
+                gb ==
+                static_cast<double>(whole)
+            )
+            {
+                return
+                    std::to_wstring(whole) +
+                    L" GB";
+            }
+
+            wchar_t buffer[32]{};
+
+            swprintf(
+                buffer,
+                32,
+                L"%.1f GB",
+                gb
+            );
+
+            return buffer;
+        };
+
+    const std::wstring packName =
+        currentManifest_.name.empty()
+            ? L"This pack"
+            : currentManifest_.name;
+
+    const std::wstring message =
+        packName +
+        L" recommends " +
+        memoryLabel(recommendedGb) +
+        L" of memory.\n\n"
+        L"You currently have " +
+        memoryLabel(currentGb) +
+        L" allocated.\n\n"
+        L"This pack cannot guarantee stable frame rates, smooth chunk loading, "
+        L"or successful game launch when using less than the recommended "
+        L"memory allocation.";
+
+    drawTextSimple(
+        dc,
+        message,
+        RECT{
+            modal.left + 28,
+            modal.top + 88,
+            modal.right - 28,
+            modal.bottom - 92
+        },
+        fontNormal_,
+        TEXT,
+        DT_LEFT |
+        DT_WORDBREAK
+    );
+
+    const RECT proceed =
+        lowMemoryProceedRect(client);
+
+    const RECT change =
+        lowMemoryChangeRect(client);
+
+    fillRectColor(
+        dc,
+        proceed,
+        PANEL
+    );
+
+    fillRectColor(
+        dc,
+        RECT{
+            proceed.left,
+            proceed.bottom - 2,
+            proceed.right,
+            proceed.bottom
+        },
+        BORDER
+    );
+
+    drawTextSimple(
+        dc,
+        L"Proceed Anyway",
+        proceed,
+        fontNormal_,
+        TEXT,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    fillRectColor(
+        dc,
+        change,
+        ACCENT
+    );
+
+    drawTextSimple(
+        dc,
+        L"Change Now",
+        change,
+        fontNormal_,
+        TEXT_DARK,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+}
+
 
 bool MainWindow::currentPackInstalled() const
 {

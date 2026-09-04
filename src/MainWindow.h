@@ -58,6 +58,9 @@ private:
 
     LauncherSettings settings_;
 
+    // Low-memory Play warning
+    bool lowMemoryWarningOpen_ = false;
+
     InstallProgress installProgress_;
     std::mutex progressMutex_;
     bool installWorkerRunning_ = false;
@@ -119,6 +122,13 @@ private:
     void openInstalledInstance();
     void launchOfficialMinecraftLauncher();
     bool currentPackInstalled() const;
+
+    bool shouldWarnAboutMemory() const;
+    void launchCurrentPack();
+    void paintLowMemoryWarning(HDC dc, const RECT& client);
+    RECT lowMemoryModalRect(const RECT& client) const;
+    RECT lowMemoryProceedRect(const RECT& client) const;
+    RECT lowMemoryChangeRect(const RECT& client) const;
 
     void openInstallRoot();
     void resetInstallRoot();
