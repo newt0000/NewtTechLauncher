@@ -157,6 +157,8 @@ std::wstring formatNewsDate(
 
 }
 
+constexpr wchar_t LAUNCHER_VERSION[] = L"0.8.4";
+
 bool MainWindow::create(
     HINSTANCE instance,
     int showCommand)
@@ -226,6 +228,9 @@ bool MainWindow::create(
     UpdateWindow(hwnd_);
 
     refreshPacks();
+
+    // Startup update checks must never block the launcher from opening.
+    checkForUpdates(false);
 
     return true;
 }
@@ -1476,7 +1481,86 @@ LRESULT MainWindow::handleMessage(
                     adjustMemory(1024);
                     return 0;
                 }
+
+                if (
+                    pointInRect(
+                        x,
+                        contentY,
+                        updateCheckRect(contentClient)
+                    )
+                )
+                {
+                    checkForUpdates(true);
+                    return 0;
+                }
+
+                if (
+                    updateAvailable_ &&
+                    pointInRect(
+                        x,
+                        contentY,
+                        updateNowRect(contentClient)
+                    )
+                )
+                {
+                    launchUpdater();
+                    return 0;
+                }
             }
+
+            return 0;
+        }
+
+        case WM_TIMER:
+        {
+            if (
+                wParam == UPDATE_PULSE_TIMER &&
+                updateAvailable_
+            )
+            {
+                updatePulseOn_ =
+                    !updatePulseOn_;
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
+            break;
+        }
+
+        case WM_UPDATE_CHECK_DONE:
+        {
+            updateCheckRunning_ = false;
+
+            if (updateAvailable_)
+            {
+                SetTimer(
+                    hwnd_,
+                    UPDATE_PULSE_TIMER,
+                    650,
+                    nullptr
+                );
+            }
+            else
+            {
+                KillTimer(
+                    hwnd_,
+                    UPDATE_PULSE_TIMER
+                );
+
+                updatePulseOn_ = false;
+            }
+
+            InvalidateRect(
+                hwnd_,
+                nullptr,
+                FALSE
+            );
 
             return 0;
         }
@@ -1729,6 +1813,11 @@ LRESULT MainWindow::handleMessage(
 
         case WM_DESTROY:
         {
+            KillTimer(
+                hwnd_,
+                UPDATE_PULSE_TIMER
+            );
+
             destroyResources();
 
             CoUninitialize();
@@ -2142,6 +2231,64 @@ void MainWindow::paintSidebar(
             DT_VCENTER |
             DT_SINGLELINE
         );
+
+        // Settings is index 4. Pulse a small magenta notification dot when
+        // the server advertises a newer launcher version.
+        if (
+            i == 4 &&
+            updateAvailable_ &&
+            updatePulseOn_
+        )
+        {
+            HBRUSH dotBrush =
+                CreateSolidBrush(
+                    ACCENT
+                );
+
+            HBRUSH oldBrush =
+                static_cast<HBRUSH>(
+                    SelectObject(
+                        dc,
+                        dotBrush
+                    )
+                );
+
+            HPEN dotPen =
+                CreatePen(
+                    PS_SOLID,
+                    1,
+                    ACCENT
+                );
+
+            HPEN oldPen =
+                static_cast<HPEN>(
+                    SelectObject(
+                        dc,
+                        dotPen
+                    )
+                );
+
+            Ellipse(
+                dc,
+                row.right - 20,
+                row.top + 16,
+                row.right - 10,
+                row.top + 26
+            );
+
+            SelectObject(
+                dc,
+                oldPen
+            );
+
+            SelectObject(
+                dc,
+                oldBrush
+            );
+
+            DeleteObject(dotPen);
+            DeleteObject(dotBrush);
+        }
     }
 
     RECT status{
@@ -5558,6 +5705,363 @@ void MainWindow::paintMediaModal(
     );
 }
 
+
+RECT MainWindow::updateCheckRect(
+    const RECT& client) const
+{
+    return RECT{
+        client.right - 310,
+        536,
+        client.right - 165,
+        578
+    };
+}
+
+RECT MainWindow::updateNowRect(
+    const RECT& client) const
+{
+    return RECT{
+        client.right - 150,
+        536,
+        client.right - 48,
+        578
+    };
+}
+
+bool MainWindow::isVersionNewer(
+    const std::wstring& candidate,
+    const std::wstring& current)
+{
+    auto parse =
+        [](std::wstring value)
+        {
+            if (
+                !value.empty() &&
+                (
+                    value[0] == L'v' ||
+                    value[0] == L'V'
+                )
+            )
+            {
+                value.erase(
+                    value.begin()
+                );
+            }
+
+            std::vector<int> parts;
+            std::wstring number;
+
+            for (wchar_t c : value)
+            {
+                if (
+                    c >= L'0' &&
+                    c <= L'9'
+                )
+                {
+                    number += c;
+                }
+                else if (c == L'.')
+                {
+                    parts.push_back(
+                        number.empty()
+                            ? 0
+                            : std::stoi(number)
+                    );
+                    number.clear();
+                }
+                else
+                {
+                    // Ignore suffixes such as "-beta" for this simple release
+                    // comparison after the numeric version has begun.
+                    break;
+                }
+            }
+
+            parts.push_back(
+                number.empty()
+                    ? 0
+                    : std::stoi(number)
+            );
+
+            return parts;
+        };
+
+    try
+    {
+        std::vector<int> a =
+            parse(candidate);
+
+        std::vector<int> b =
+            parse(current);
+
+        const size_t count =
+            std::max(
+                a.size(),
+                b.size()
+            );
+
+        a.resize(count, 0);
+        b.resize(count, 0);
+
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (a[i] > b[i])
+                return true;
+
+            if (a[i] < b[i])
+                return false;
+        }
+    }
+    catch (...)
+    {
+        return false;
+    }
+
+    return false;
+}
+
+void MainWindow::checkForUpdates(
+    bool manual)
+{
+    if (updateCheckRunning_)
+        return;
+
+    updateCheckRunning_ = true;
+
+    if (manual)
+    {
+        updateStatus_ =
+            L"Checking for launcher updates...";
+
+        InvalidateRect(
+            hwnd_,
+            nullptr,
+            FALSE
+        );
+    }
+
+    std::thread(
+        [this, manual]()
+        {
+            try
+            {
+                /*
+                    Keep this endpoint deliberately simple. The PHP file can
+                    later generate the same JSON dynamically without requiring
+                    any launcher-side changes.
+                */
+                const std::wstring endpoint =
+                    L"https://launcher.newttech.net/app/update.json";
+
+                const std::string json =
+                    HttpClient::getUtf8(
+                        endpoint
+                    );
+
+                const JsonValue root =
+                    JsonLite::parse(json);
+
+                const std::wstring latest =
+                    utf8ToWide(
+                        root
+                            .get("latestVersion")
+                            .asString()
+                    );
+
+                const std::wstring title =
+                    utf8ToWide(
+                        root
+                            .get("title")
+                            .asString()
+                    );
+
+                const std::wstring notes =
+                    utf8ToWide(
+                        root
+                            .get("notes")
+                            .asString()
+                    );
+
+                if (latest.empty())
+                    throw std::runtime_error(
+                        "Update manifest is missing latestVersion."
+                    );
+
+                updateLatestVersion_ = latest;
+                updateTitle_ = title;
+                updateNotes_ = notes;
+                updateCheckCompleted_ = true;
+
+                updateAvailable_ =
+                    isVersionNewer(
+                        latest,
+                        LAUNCHER_VERSION
+                    );
+
+                if (updateAvailable_)
+                {
+                    updateStatus_ =
+                        !title.empty()
+                            ? title
+                            : L"NewtTech Launcher v" +
+                              latest +
+                              L" is available.";
+
+                    if (!notes.empty())
+                    {
+                        updateStatus_ +=
+                            L"\n" +
+                            notes;
+                    }
+                }
+                else
+                {
+                    updateStatus_ =
+                        L"You're up to date.";
+                }
+            }
+            catch (const std::exception& error)
+            {
+                updateCheckCompleted_ = true;
+                updateAvailable_ = false;
+                updateLatestVersion_.clear();
+
+                /*
+                    Startup checks fail quietly from the user's perspective.
+                    Manual checks expose a useful error message.
+                */
+                if (manual)
+                {
+                    updateStatus_ =
+                        L"Unable to check for updates: " +
+                        utf8ToWide(
+                            error.what()
+                        );
+                }
+                else
+                {
+                    updateStatus_ =
+                        L"Updates could not be checked automatically.";
+                }
+            }
+
+            if (hwnd_)
+            {
+                PostMessageW(
+                    hwnd_,
+                    WM_UPDATE_CHECK_DONE,
+                    0,
+                    0
+                );
+            }
+        }
+    ).detach();
+}
+
+void MainWindow::launchUpdater()
+{
+    wchar_t localAppData[MAX_PATH]{};
+
+    const DWORD length =
+        GetEnvironmentVariableW(
+            L"LOCALAPPDATA",
+            localAppData,
+            MAX_PATH
+        );
+
+    if (
+        length == 0 ||
+        length >= MAX_PATH
+    )
+    {
+        updateStatus_ =
+            L"Unable to locate your Local AppData folder.";
+
+        InvalidateRect(
+            hwnd_,
+            nullptr,
+            FALSE
+        );
+
+        return;
+    }
+
+    const std::filesystem::path installerPath =
+        std::filesystem::path(
+            localAppData
+        ) /
+        L"Programs" /
+        L"NewtTech Launcher" /
+        L"NewtTechInstaller.exe";
+
+    std::error_code error;
+
+    if (
+        !std::filesystem::exists(
+            installerPath,
+            error
+        ) ||
+        !std::filesystem::is_regular_file(
+            installerPath,
+            error
+        )
+    )
+    {
+        updateStatus_ =
+            L"NewtTechInstaller.exe is not installed. "
+            L"Run the latest NewtTech installer once to add the local updater.";
+
+        InvalidateRect(
+            hwnd_,
+            nullptr,
+            FALSE
+        );
+
+        return;
+    }
+
+    /*
+        The installer is deliberately stored beside NewtTechLauncher.exe.
+        Update Now launches that local executable directly; no browser or
+        download URL is involved.
+    */
+    const HINSTANCE result =
+        ShellExecuteW(
+            hwnd_,
+            L"open",
+            installerPath.c_str(),
+            nullptr,
+            installerPath.parent_path().c_str(),
+            SW_SHOWNORMAL
+        );
+
+    if (
+        reinterpret_cast<INT_PTR>(
+            result
+        ) <= 32
+    )
+    {
+        updateStatus_ =
+            L"Unable to start NewtTechInstaller.exe.";
+
+        InvalidateRect(
+            hwnd_,
+            nullptr,
+            FALSE
+        );
+
+        return;
+    }
+
+    // Only close after Windows successfully accepts the installer launch.
+    SendMessageW(
+        hwnd_,
+        WM_CLOSE,
+        0,
+        0
+    );
+}
+
 void MainWindow::paintSettings(
     HDC dc,
     const RECT& client)
@@ -5761,6 +6265,144 @@ void MainWindow::paintSettings(
         DT_LEFT |
         DT_WORDBREAK
     );
+
+
+    RECT updates{
+        241,
+        492,
+        client.right - 30,
+        686
+    };
+
+    fillRectColor(
+        dc,
+        updates,
+        PANEL
+    );
+
+    drawTextSimple(
+        dc,
+        L"LAUNCHER UPDATES",
+        RECT{
+            270,
+            514,
+            client.right - 60,
+            536
+        },
+        fontMeta_,
+        ACCENT,
+        DT_LEFT |
+        DT_SINGLELINE
+    );
+
+    const std::wstring currentText =
+        L"Current version: v" +
+        std::wstring(
+            LAUNCHER_VERSION
+        );
+
+    drawTextSimple(
+        dc,
+        currentText,
+        RECT{
+            270,
+            548,
+            client.right - 340,
+            572
+        },
+        fontNormal_,
+        TEXT,
+        DT_LEFT |
+        DT_SINGLELINE
+    );
+
+    std::wstring latestText =
+        L"Latest version: ";
+
+    latestText +=
+        updateLatestVersion_.empty()
+            ? L"—"
+            : L"v" + updateLatestVersion_;
+
+    drawTextSimple(
+        dc,
+        latestText,
+        RECT{
+            270,
+            574,
+            client.right - 340,
+            598
+        },
+        fontSmall_,
+        MUTED,
+        DT_LEFT |
+        DT_SINGLELINE
+    );
+
+    drawTextSimple(
+        dc,
+        updateStatus_,
+        RECT{
+            270,
+            606,
+            client.right - 330,
+            666
+        },
+        fontSmall_,
+        updateAvailable_
+            ? SUCCESS
+            : MUTED,
+        DT_LEFT |
+        DT_WORDBREAK |
+        DT_END_ELLIPSIS
+    );
+
+    const RECT check =
+        updateCheckRect(client);
+
+    fillRectColor(
+        dc,
+        check,
+        CARD
+    );
+
+    drawTextSimple(
+        dc,
+        updateCheckRunning_
+            ? L"Checking..."
+            : L"Check for Updates",
+        check,
+        fontNormal_,
+        updateCheckRunning_
+            ? MUTED
+            : TEXT,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    if (updateAvailable_)
+    {
+        const RECT update =
+            updateNowRect(client);
+
+        fillRectColor(
+            dc,
+            update,
+            ACCENT
+        );
+
+        drawTextSimple(
+            dc,
+            L"Update Now",
+            update,
+            fontNormal_,
+            TEXT_DARK,
+            DT_CENTER |
+            DT_VCENTER |
+            DT_SINGLELINE
+        );
+    }
 }
 
 void MainWindow::drawBitmapCover(
@@ -7469,11 +8111,33 @@ void MainWindow::paintTitleBar(
         RECT{
             29,
             0,
-            250,
+            155,
             TITLEBAR_HEIGHT
         },
         fontSmall_,
         TEXT,
+        DT_LEFT |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    const std::wstring versionTag =
+        L"v" +
+        std::wstring(
+            LAUNCHER_VERSION
+        );
+
+    drawTextSimple(
+        dc,
+        versionTag,
+        RECT{
+            158,
+            0,
+            225,
+            TITLEBAR_HEIGHT
+        },
+        fontMeta_,
+        CYAN,
         DT_LEFT |
         DT_VCENTER |
         DT_SINGLELINE

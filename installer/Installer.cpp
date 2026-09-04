@@ -155,6 +155,11 @@ std::filesystem::path launcherPath()
     return installDir() / L"NewtTechLauncher.exe";
 }
 
+std::filesystem::path installerPath()
+{
+    return installDir() / L"NewtTechInstaller.exe";
+}
+
 std::filesystem::path uninstallerPath()
 {
     return installDir() / L"Uninstall NewtTech Launcher.exe";
@@ -598,8 +603,72 @@ void runInstall()
             MAX_PATH
         );
 
+        const std::filesystem::path selfPath(
+            self
+        );
+
+        /*
+            Keep a reusable copy of the installer beside the launcher so
+            NewtTech Launcher can hand future updates back to the installer
+            without opening a browser.
+
+            If this installation/update was already started from the installed
+            NewtTechInstaller.exe, do not try to overwrite the running file.
+        */
+        /*
+            Always ensure the persistent updater exists after every install,
+            repair, or update.
+
+            std::filesystem::equivalent() reports an error when the destination
+            does not exist, which made the previous logic unreliable during a
+            repair of an older installation. Compare normalized absolute paths
+            instead; this works whether NewtTechInstaller.exe already exists or
+            not.
+        */
+        std::error_code pathError;
+
+        const std::filesystem::path normalizedSelf =
+            std::filesystem::weakly_canonical(
+                selfPath,
+                pathError
+            );
+
+        pathError.clear();
+
+        const std::filesystem::path normalizedInstalled =
+            std::filesystem::weakly_canonical(
+                installerPath(),
+                pathError
+            );
+
+        const bool runningInstalledInstaller =
+            !pathError &&
+            !normalizedSelf.empty() &&
+            !normalizedInstalled.empty() &&
+            normalizedSelf ==
+                normalizedInstalled;
+
+        if (!runningInstalledInstaller)
+        {
+            updateState(
+                89,
+                L"Installing local updater..."
+            );
+
+            std::filesystem::copy_file(
+                selfPath,
+                installerPath(),
+                std::filesystem::copy_options::overwrite_existing
+            );
+        }
+
+        /*
+            Repair/update also refreshes the uninstaller copy. If the installer
+            itself is currently the installed updater, copying the same source
+            to the separate uninstaller path is safe.
+        */
         std::filesystem::copy_file(
-            self,
+            selfPath,
             uninstallerPath(),
             std::filesystem::copy_options::overwrite_existing
         );
@@ -695,6 +764,11 @@ void uninstall()
 
     std::filesystem::remove(
         launcherPath(),
+        ec
+    );
+
+    std::filesystem::remove(
+        installerPath(),
         ec
     );
 

@@ -88,6 +88,16 @@ private:
     // Low-memory Play warning
     bool lowMemoryWarningOpen_ = false;
 
+    // Launcher update checking
+    bool updateCheckRunning_ = false;
+    bool updateAvailable_ = false;
+    bool updateCheckCompleted_ = false;
+    bool updatePulseOn_ = true;
+    std::wstring updateLatestVersion_;
+    std::wstring updateTitle_;
+    std::wstring updateNotes_;
+    std::wstring updateStatus_ = L"Updates have not been checked yet.";
+
     InstallProgress installProgress_;
     std::mutex progressMutex_;
     bool installWorkerRunning_ = false;
@@ -103,6 +113,8 @@ private:
 
     static constexpr UINT WM_INSTALL_PROGRESS = WM_APP + 1;
     static constexpr UINT WM_INSTALL_DONE = WM_APP + 2;
+    static constexpr UINT WM_UPDATE_CHECK_DONE = WM_APP + 3;
+    static constexpr UINT UPDATE_PULSE_TIMER = 41;
 
     static LRESULT CALLBACK windowProc(HWND, UINT, WPARAM, LPARAM);
     LRESULT handleMessage(HWND, UINT, WPARAM, LPARAM);
@@ -172,6 +184,15 @@ private:
     void openInstallRoot();
     void resetInstallRoot();
     void adjustMemory(int deltaMb);
+
+    void checkForUpdates(bool manual);
+    void launchUpdater();
+    static bool isVersionNewer(
+        const std::wstring& candidate,
+        const std::wstring& current
+    );
+    RECT updateCheckRect(const RECT& client) const;
+    RECT updateNowRect(const RECT& client) const;
 
     void parseIndex(const std::string& json);
     PackManifest parseManifest(const std::string& json);

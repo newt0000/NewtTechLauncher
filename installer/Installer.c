@@ -1032,6 +1032,71 @@ static BOOL self_path(wchar_t *out, DWORD count) {
     return GetModuleFileNameW(NULL, out, count) > 0;
 }
 
+/*
+    Ensure a reusable NewtTechInstaller.exe exists beside the launcher.
+
+    IMPORTANT: CMake builds Installer.c, not Installer.cpp. Repair, Update, and
+    fresh Install all run through install_thread(), so this helper is called
+    from that shared path every time.
+
+    If the installer is already running from the installed destination, the
+    file already exists and must not be copied over itself.
+*/
+static BOOL ensure_persistent_installer(
+    const wchar_t *installDir,
+    wchar_t *installedInstaller,
+    DWORD installedInstallerCount)
+{
+    wchar_t self[MAX_PATH * 2] = {0};
+    wchar_t selfFull[MAX_PATH * 2] = {0};
+    wchar_t destFull[MAX_PATH * 2] = {0};
+
+    if (!self_path(self, MAX_PATH * 2))
+        return FALSE;
+
+    _snwprintf(
+        installedInstaller,
+        installedInstallerCount,
+        L"%s\\NewtTechInstaller.exe",
+        installDir
+    );
+    installedInstaller[installedInstallerCount - 1] = L'\0';
+
+    if (!GetFullPathNameW(
+            self,
+            MAX_PATH * 2,
+            selfFull,
+            NULL))
+    {
+        return FALSE;
+    }
+
+    if (!GetFullPathNameW(
+            installedInstaller,
+            MAX_PATH * 2,
+            destFull,
+            NULL))
+    {
+        return FALSE;
+    }
+
+    if (_wcsicmp(selfFull, destFull) == 0) {
+        return GetFileAttributesW(installedInstaller) !=
+               INVALID_FILE_ATTRIBUTES;
+    }
+
+    if (!CopyFileW(
+            self,
+            installedInstaller,
+            FALSE))
+    {
+        return FALSE;
+    }
+
+    return GetFileAttributesW(installedInstaller) !=
+           INVALID_FILE_ATTRIBUTES;
+}
+
 static void uninstall_app(void) {
     if (MessageBoxW(NULL,
         L"Remove NewtTech Launcher?\n\nYour downloaded modpack instances will be kept.",
@@ -1179,6 +1244,7 @@ static DWORD WINAPI install_thread(LPVOID unused) {
     set_state(88, L"Creating Start Menu shortcuts...");
 
     wchar_t launcher[MAX_PATH * 2];
+    wchar_t installedInstaller[MAX_PATH * 2];
     wchar_t uninstaller[MAX_PATH * 2];
 
     _snwprintf(
@@ -1188,6 +1254,27 @@ static DWORD WINAPI install_thread(LPVOID unused) {
         install
     );
 
+    set_state(86, L"Installing local updater...");
+
+    if (!ensure_persistent_installer(
+            install,
+            installedInstaller,
+            MAX_PATH * 2))
+    {
+        DWORD copyError = GetLastError();
+        wchar_t errorMessage[512];
+
+        _snwprintf(
+            errorMessage,
+            512,
+            L"Unable to install NewtTechInstaller.exe (Windows error %lu).",
+            copyError
+        );
+
+        set_state(0, errorMessage);
+        goto fail;
+    }
+
     _snwprintf(
         uninstaller,
         MAX_PATH * 2,
@@ -1195,8 +1282,8 @@ static DWORD WINAPI install_thread(LPVOID unused) {
         install
     );
 
-    wchar_t self[MAX_PATH];
-    self_path(self, MAX_PATH);
+    wchar_t self[MAX_PATH * 2];
+    self_path(self, MAX_PATH * 2);
 
     if (!CopyFileW(self, uninstaller, FALSE)) {
         set_state(0, L"Unable to create the NewtTech uninstaller.");
