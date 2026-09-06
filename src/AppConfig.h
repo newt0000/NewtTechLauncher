@@ -3,7 +3,7 @@
 namespace AppConfig
 {
     inline constexpr wchar_t APP_NAME[] = L"NewtTech Launcher";
-    inline constexpr wchar_t APP_VERSION[] = L"0.8.5-beta";
+    inline constexpr wchar_t APP_VERSION[] = L"0.8.6-beta";
 
     inline constexpr wchar_t INDEX_URL[] =
         L"https://launcher.newttech.net/api/index.php";
@@ -13,6 +13,9 @@ namespace AppConfig
 
     inline constexpr wchar_t NEWS_URL[] =
         L"https://launcher.newttech.net/news/index.json";
+
+    inline constexpr wchar_t ACCOUNT_REGISTER_URL[] =
+        L"https://launcher.newttech.net/account/user/";
 
     inline constexpr wchar_t MOJANG_VERSION_MANIFEST[] =
         L"https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";

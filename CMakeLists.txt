@@ -15,6 +15,8 @@ add_executable(NewtTechLauncher WIN32
         src/Models.h
         src/HttpClient.h
         src/HttpClient.cpp
+        src/AuthManager.h
+        src/AuthManager.cpp
         src/JsonLite.h
         src/JsonLite.cpp
         src/ImageLoader.h

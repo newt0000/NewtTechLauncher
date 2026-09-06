@@ -224,3 +224,90 @@ void HttpClient::downloadToFile(
             progress(downloaded, total);
     }
 }
+
+
+std::string HttpClient::postJsonUtf8(
+    const std::wstring& url,
+    const std::string& json,
+    const std::vector<std::pair<std::wstring, std::wstring>>& headers)
+{
+    URL_COMPONENTSW uc{};
+    uc.dwStructSize = sizeof(uc);
+    wchar_t host[512]{};
+    wchar_t path[4096]{};
+    uc.lpszHostName = host;
+    uc.dwHostNameLength = static_cast<DWORD>(std::size(host));
+    uc.lpszUrlPath = path;
+    uc.dwUrlPathLength = static_cast<DWORD>(std::size(path));
+
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc))
+        throw std::runtime_error("Invalid API URL.");
+
+    Handles h;
+    h.session = WinHttpOpen(
+        L"NewtTechLauncher/0.8.5",
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0
+    );
+    if (!h.session) throw std::runtime_error("Unable to initialize WinHTTP.");
+
+    h.connection = WinHttpConnect(
+        h.session,
+        std::wstring(host, uc.dwHostNameLength).c_str(),
+        uc.nPort,
+        0
+    );
+    if (!h.connection) throw std::runtime_error("Unable to connect to account server.");
+
+    std::wstring requestPath(path, uc.dwUrlPathLength);
+    if (requestPath.empty()) requestPath = L"/";
+
+    h.request = WinHttpOpenRequest(
+        h.connection, L"POST", requestPath.c_str(), nullptr,
+        WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+        uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0
+    );
+    if (!h.request) throw std::runtime_error("Unable to create API request.");
+
+    std::wstring allHeaders = L"Content-Type: application/json\\r\\nAccept: application/json\\r\\n";
+    for (const auto& item : headers)
+        allHeaders += item.first + L": " + item.second + L"\\r\\n";
+
+    if (!WinHttpSendRequest(
+            h.request,
+            allHeaders.c_str(),
+            static_cast<DWORD>(-1L),
+            json.empty() ? WINHTTP_NO_REQUEST_DATA : (LPVOID)json.data(),
+            static_cast<DWORD>(json.size()),
+            static_cast<DWORD>(json.size()),
+            0) ||
+        !WinHttpReceiveResponse(h.request, nullptr))
+        throw std::runtime_error("Account API request failed.");
+
+    DWORD status = 0, statusSize = sizeof(status);
+    WinHttpQueryHeaders(
+        h.request,
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX,
+        &status, &statusSize, WINHTTP_NO_HEADER_INDEX
+    );
+
+    std::string result;
+    for (;;)
+    {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(h.request, &available) || available == 0) break;
+        std::vector<char> buffer(available);
+        DWORD read = 0;
+        if (!WinHttpReadData(h.request, buffer.data(), available, &read))
+            throw std::runtime_error("Unable to read account API response.");
+        result.append(buffer.data(), read);
+    }
+
+    if (status < 200 || status >= 300)
+        throw std::runtime_error(result.empty() ? "Account server rejected the request." : result);
+
+    return result;
+}
