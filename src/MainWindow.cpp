@@ -25,6 +25,15 @@
 
 namespace
 {
+constexpr UINT WM_ACCOUNT_AVATAR_READY = WM_APP + 43;
+
+struct AccountAvatarReady
+{
+    std::wstring username;
+    std::wstring uuid;
+    HBITMAP bitmap = nullptr;
+};
+
 constexpr COLORREF BG            = RGB(5, 10, 24);
 constexpr COLORREF PANEL         = RGB(8, 17, 38);
 constexpr COLORREF CARD          = RGB(12, 25, 51);
@@ -157,7 +166,7 @@ std::wstring formatNewsDate(
 
 }
 
-constexpr wchar_t LAUNCHER_VERSION[] = L"0.8.5";
+constexpr wchar_t LAUNCHER_VERSION[] = L"0.9.0";
 
 bool MainWindow::create(
     HINSTANCE instance,
@@ -219,6 +228,26 @@ bool MainWindow::create(
 
     createFonts();
     applyModernWindowStyle();
+    createLoginControls();
+
+    // Restore the cached account BEFORE exposing the login wall.
+    // This makes CLion/debug and installed builds follow the same path because
+    // AuthManager stores the session under %LOCALAPPDATA%, not beside the EXE.
+    authenticated_ = false;
+    authUser_ = AuthUser{};
+    authError_.clear();
+
+    if (AuthManager::hasToken())
+    {
+        authenticated_ =
+            AuthManager::restore(
+                authUser_
+            );
+    }
+
+    showLoginControls(
+        !authenticated_
+    );
 
     ShowWindow(
         hwnd_,
@@ -227,10 +256,14 @@ bool MainWindow::create(
 
     UpdateWindow(hwnd_);
 
-    refreshPacks();
-
-    // Startup update checks must never block the launcher from opening.
-    checkForUpdates(false);
+    if (authenticated_)
+    {
+        completeAuthenticatedStartup();
+    }
+    else
+    {
+        SetFocus(loginUsername_);
+    }
 
     return true;
 }
@@ -248,6 +281,40 @@ int MainWindow::run()
         ) > 0
     )
     {
+        // Enter from either edit field submits the form.  Doing this in
+        // the message loop catches the key while focus belongs to the child
+        // EDIT control (the parent does not receive that WM_KEYDOWN).
+        if (
+            !authenticated_ &&
+            msg.message == WM_KEYDOWN &&
+            msg.wParam == VK_RETURN &&
+            (
+                msg.hwnd == loginUsername_ ||
+                msg.hwnd == loginPassword_ ||
+                msg.hwnd == loginButton_
+            )
+        )
+        {
+            if (!authBusy_)
+                attemptLogin();
+
+            continue;
+        }
+
+        // Give the unauthenticated login wall normal Windows form keyboard
+        // navigation.  WS_TABSTOP already defines the desired order:
+        // Username -> Password -> Sign In -> Register now.
+        if (
+            !authenticated_ &&
+            IsDialogMessageW(
+                hwnd_,
+                &msg
+            )
+        )
+        {
+            continue;
+        }
+
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
@@ -411,6 +478,39 @@ LRESULT MainWindow::handleMessage(
 
         case WM_MOUSEWHEEL:
         {
+            if (
+                authenticated_ &&
+                page_ == Page::Settings
+            )
+            {
+                RECT client{};
+                GetClientRect(
+                    hwnd_,
+                    &client
+                );
+
+                const int delta =
+                    GET_WHEEL_DELTA_WPARAM(
+                        wParam
+                    );
+
+                settingsScrollY_ -=
+                    (delta / WHEEL_DELTA) *
+                    72;
+
+                clampSettingsScroll(
+                    client
+                );
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
             if (
                 page_ == Page::Media &&
                 mediaOpenInstance_ < 0
@@ -715,6 +815,86 @@ LRESULT MainWindow::handleMessage(
         case WM_MOUSEMOVE:
         {
             if (
+                settingsScrollDragging_ &&
+                page_ == Page::Settings
+            )
+            {
+                RECT client{};
+                GetClientRect(
+                    hwnd_,
+                    &client
+                );
+
+                RECT contentClient{
+                    217,
+                    30,
+                    client.right,
+                    client.bottom
+                };
+
+                RECT track =
+                    settingsScrollbarTrackRect(
+                        contentClient
+                    );
+
+                RECT thumb =
+                    settingsScrollbarThumbRect(
+                        contentClient
+                    );
+
+                const int thumbHeight =
+                    thumb.bottom -
+                    thumb.top;
+
+                const int travel =
+                    std::max(
+                        1,
+                        static_cast<int>(
+                            track.bottom -
+                            track.top
+                        ) -
+                        thumbHeight
+                    );
+
+                const int mouseY =
+                    GET_Y_LPARAM(lParam) -
+                    30;
+
+                const int desired =
+                    std::clamp<int>(
+                        mouseY -
+                        static_cast<int>(track.top) -
+                        settingsScrollDragOffset_,
+                        0,
+                        travel
+                    );
+
+                settingsScrollY_ =
+                    static_cast<int>(
+                        (static_cast<long long>(
+                            desired
+                        ) *
+                         settingsMaxScroll(
+                             contentClient
+                         )) /
+                        travel
+                    );
+
+                clampSettingsScroll(
+                    contentClient
+                );
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+
+                return 0;
+            }
+
+
+            if (
                 page_ == Page::Home &&
                 openNewsIndex_ >= 0 &&
                 newsModalScrollbarDragging_
@@ -894,6 +1074,14 @@ LRESULT MainWindow::handleMessage(
 
         case WM_LBUTTONUP:
         {
+            if (settingsScrollDragging_)
+            {
+                settingsScrollDragging_ = false;
+                ReleaseCapture();
+                return 0;
+            }
+
+
             if (newsModalScrollbarDragging_)
             {
                 newsModalScrollbarDragging_ =
@@ -1030,6 +1218,19 @@ LRESULT MainWindow::handleMessage(
                 }
 
                 // Ignore all other clicks while the warning is open.
+                return 0;
+            }
+
+            if (
+                pointInRect(
+                    x,
+                    contentY,
+                    sidebarAccountRect()
+                )
+            )
+            {
+                page_ = Page::Settings;
+                InvalidateRect(hwnd_,nullptr,FALSE);
                 return 0;
             }
 
@@ -1204,31 +1405,155 @@ LRESULT MainWindow::handleMessage(
                     contentY +
                     homeScrollY_;
 
-                RECT openPacks{
-                    250,
-                    310,
-                    420,
-                    356
-                };
+                const int featured =
+                    homeFeaturedPack();
+
+                // Featured pack: Play Now
+                if (
+                    featured >= 0 &&
+                    pointInRect(
+                        x,
+                        virtualY,
+                        homeHeroPlayRect(
+                            contentClient
+                        )
+                    )
+                )
+                {
+                    // Make sure the manifest belongs to the pack shown
+                    // in the Home hero before launching it.
+                    if (selectedPack_ != featured)
+                        selectPack(featured);
+
+                    if (currentPackInstalled())
+                    {
+                        if (shouldWarnAboutMemory())
+                        {
+                            lowMemoryWarningOpen_ = true;
+                            InvalidateRect(hwnd_,nullptr,FALSE);
+                            return 0;
+                        }
+
+                        launchCurrentPack();
+                    }
+                    else
+                    {
+                        startInstallOrRepair();
+                    }
+
+                    return 0;
+                }
+
+                // Featured pack: open the full Modpacks view.
+                if (
+                    featured >= 0 &&
+                    pointInRect(
+                        x,
+                        virtualY,
+                        homeHeroViewRect(
+                            contentClient
+                        )
+                    )
+                )
+                {
+                    if (selectedPack_ != featured)
+                        selectPack(featured);
+
+                    page_ = Page::Modpacks;
+                    InvalidateRect(hwnd_,nullptr,FALSE);
+                    return 0;
+                }
 
                 if (
                     pointInRect(
                         x,
                         virtualY,
-                        openPacks
+                        homeViewAllPacksRect(
+                            contentClient
+                        )
                     )
                 )
                 {
-                    page_ =
-                        Page::Modpacks;
+                    page_ = Page::Modpacks;
+                    InvalidateRect(hwnd_,nullptr,FALSE);
+                    return 0;
+                }
 
-                    InvalidateRect(
-                        hwnd_,
-                        nullptr,
-                        FALSE
+                const std::vector<int> installed =
+                    homeInstalledPacks();
+
+                const int maxOffset =
+                    std::max(
+                        0,
+                        static_cast<int>(
+                            installed.size()
+                        ) - 3
                     );
 
+                if (
+                    homeCarouselOffset_ > 0 &&
+                    pointInRect(
+                        x,
+                        virtualY,
+                        homeCarouselPrevRect(
+                            contentClient
+                        )
+                    )
+                )
+                {
+                    --homeCarouselOffset_;
+                    InvalidateRect(hwnd_,nullptr,FALSE);
                     return 0;
+                }
+
+                if (
+                    homeCarouselOffset_ < maxOffset &&
+                    pointInRect(
+                        x,
+                        virtualY,
+                        homeCarouselNextRect(
+                            contentClient
+                        )
+                    )
+                )
+                {
+                    ++homeCarouselOffset_;
+                    InvalidateRect(hwnd_,nullptr,FALSE);
+                    return 0;
+                }
+
+                // Clicking an installed-pack card makes it the Home hero.
+                for (int slot = 0; slot < 3; ++slot)
+                {
+                    const int position =
+                        homeCarouselOffset_ + slot;
+
+                    if (
+                        position >=
+                        static_cast<int>(
+                            installed.size()
+                        )
+                    )
+                        break;
+
+                    if (
+                        pointInRect(
+                            x,
+                            virtualY,
+                            homeCarouselCardRect(
+                                contentClient,
+                                slot
+                            )
+                        )
+                    )
+                    {
+                        selectPack(
+                            installed[position]
+                        );
+
+                        InvalidateRect(hwnd_,nullptr,FALSE);
+                        return 0;
+                    }
                 }
 
                 if (
@@ -1434,10 +1759,99 @@ LRESULT MainWindow::handleMessage(
 
             if (page_ == Page::Settings)
             {
+                const RECT settingsTrack =
+                    settingsScrollbarTrackRect(
+                        contentClient
+                    );
+
+                const RECT settingsThumb =
+                    settingsScrollbarThumbRect(
+                        contentClient
+                    );
+
                 if (
+                    settingsMaxScroll(
+                        contentClient
+                    ) > 0 &&
                     pointInRect(
                         x,
                         contentY,
+                        settingsThumb
+                    )
+                )
+                {
+                    settingsScrollDragging_ = true;
+                    settingsScrollDragOffset_ =
+                        contentY -
+                        settingsThumb.top;
+                    SetCapture(hwnd_);
+                    return 0;
+                }
+
+                if (
+                    settingsMaxScroll(
+                        contentClient
+                    ) > 0 &&
+                    pointInRect(
+                        x,
+                        contentY,
+                        settingsTrack
+                    )
+                )
+                {
+                    const int trackHeight =
+                        settingsTrack.bottom -
+                        settingsTrack.top;
+
+                    const int thumbHeight =
+                        settingsThumb.bottom -
+                        settingsThumb.top;
+
+                    const int travel =
+                        std::max(
+                            1,
+                            trackHeight -
+                            thumbHeight
+                        );
+
+                    const int desired =
+                        std::clamp<int>(
+                            static_cast<int>(contentY) -
+                            static_cast<int>(settingsTrack.top) -
+                            thumbHeight / 2,
+                            0,
+                            travel
+                        );
+
+                    settingsScrollY_ =
+                        static_cast<int>(
+                            (static_cast<long long>(
+                                desired
+                            ) *
+                             settingsMaxScroll(
+                                 contentClient
+                             )) /
+                            travel
+                        );
+
+                    clampSettingsScroll(
+                        contentClient
+                    );
+
+                    InvalidateRect(
+                        hwnd_,
+                        nullptr,
+                        FALSE
+                    );
+
+                    return 0;
+                }
+
+                const int settingsY = static_cast<int>(contentY) + settingsScrollY_;
+                if (
+                    pointInRect(
+                        x,
+                        settingsY,
                         openFolderRect(contentClient)
                     )
                 )
@@ -1449,7 +1863,7 @@ LRESULT MainWindow::handleMessage(
                 if (
                     pointInRect(
                         x,
-                        contentY,
+                        settingsY,
                         resetFolderRect(contentClient)
                     )
                 )
@@ -1461,7 +1875,7 @@ LRESULT MainWindow::handleMessage(
                 if (
                     pointInRect(
                         x,
-                        contentY,
+                        settingsY,
                         memoryMinusRect(contentClient)
                     )
                 )
@@ -1473,7 +1887,7 @@ LRESULT MainWindow::handleMessage(
                 if (
                     pointInRect(
                         x,
-                        contentY,
+                        settingsY,
                         memoryPlusRect(contentClient)
                     )
                 )
@@ -1485,7 +1899,7 @@ LRESULT MainWindow::handleMessage(
                 if (
                     pointInRect(
                         x,
-                        contentY,
+                        settingsY,
                         updateCheckRect(contentClient)
                     )
                 )
@@ -1498,7 +1912,7 @@ LRESULT MainWindow::handleMessage(
                     updateAvailable_ &&
                     pointInRect(
                         x,
-                        contentY,
+                        settingsY,
                         updateNowRect(contentClient)
                     )
                 )
@@ -1506,13 +1920,283 @@ LRESULT MainWindow::handleMessage(
                     launchUpdater();
                     return 0;
                 }
+
+                if (
+                    pointInRect(
+                        x,
+                        settingsY,
+                        accountLogoutRect(contentClient)
+                    )
+                )
+                {
+                    // Sign out is explicit: invalidate the server session
+                    // where possible, then always erase the local DPAPI cache.
+                    AuthManager::logout();
+
+                    authenticated_ = false;
+                    authUser_ = AuthUser{};
+                    authError_.clear();
+                    authBusy_ = false;
+                    settingsScrollY_ = 0;
+                    page_ = Page::Home;
+
+                    SetWindowTextW(loginUsername_, L"");
+                    SetWindowTextW(loginPassword_, L"");
+
+                    KillTimer(
+                        hwnd_,
+                        AUTH_HEARTBEAT_TIMER
+                    );
+
+                    showLoginControls(true);
+
+                    InvalidateRect(
+                        hwnd_,
+                        nullptr,
+                        FALSE
+                    );
+
+                    return 0;
+                }
             }
 
             return 0;
         }
 
+        case WM_APP + 20:
+        {
+            EnableWindow(loginButton_,TRUE);
+            if (wParam == 1)
+                completeAuthenticatedStartup();
+            else
+                InvalidateRect(hwnd_,nullptr,FALSE);
+            return 0;
+        }
+
+        case WM_CTLCOLOREDIT:
+        {
+            HDC editDc = reinterpret_cast<HDC>(wParam);
+            HWND edit = reinterpret_cast<HWND>(lParam);
+
+            if (
+                edit == loginUsername_ ||
+                edit == loginPassword_
+            )
+            {
+                SetTextColor(editDc, TEXT);
+                SetBkColor(editDc, CARD);
+                static HBRUSH loginEditBrush =
+                    CreateSolidBrush(CARD);
+                return reinterpret_cast<LRESULT>(
+                    loginEditBrush
+                );
+            }
+
+            break;
+        }
+
+        case WM_DRAWITEM:
+        {
+            DRAWITEMSTRUCT* item =
+                reinterpret_cast<DRAWITEMSTRUCT*>(
+                    lParam
+                );
+
+            if (
+                item &&
+                (
+                    item->CtlID == ID_LOGIN_BUTTON ||
+                    item->CtlID == ID_REGISTER_BUTTON
+                )
+            )
+            {
+                const bool signIn =
+                    item->CtlID == ID_LOGIN_BUTTON;
+
+                const bool pressed =
+                    (item->itemState & ODS_SELECTED) != 0;
+
+                RECT r = item->rcItem;
+
+                const COLORREF background =
+                    signIn
+                        ? (pressed ? RGB(220,20,155) : ACCENT)
+                        : CARD;
+
+                fillRectColor(
+                    item->hDC,
+                    r,
+                    background
+                );
+
+                if (!signIn)
+                {
+                    HPEN pen = CreatePen(
+                        PS_SOLID,
+                        1,
+                        RGB(42,83,120)
+                    );
+                    HGDIOBJ oldPen =
+                        SelectObject(
+                            item->hDC,
+                            pen
+                        );
+                    HGDIOBJ oldBrush =
+                        SelectObject(
+                            item->hDC,
+                            GetStockObject(
+                                NULL_BRUSH
+                            )
+                        );
+                    Rectangle(
+                        item->hDC,
+                        r.left,
+                        r.top,
+                        r.right,
+                        r.bottom
+                    );
+                    SelectObject(
+                        item->hDC,
+                        oldBrush
+                    );
+                    SelectObject(
+                        item->hDC,
+                        oldPen
+                    );
+                    DeleteObject(pen);
+                }
+
+                const wchar_t* text =
+                    signIn
+                        ? L"Sign In"
+                        : L"Register now";
+
+                drawTextSimple(
+                    item->hDC,
+                    text,
+                    r,
+                    fontNormal_,
+                    signIn ? RGB(5,12,24) : CYAN,
+                    DT_CENTER |
+                    DT_VCENTER |
+                    DT_SINGLELINE
+                );
+
+                if (
+                    item->itemState &
+                    ODS_FOCUS
+                )
+                {
+                    RECT focus = r;
+                    InflateRect(
+                        &focus,
+                        -4,
+                        -4
+                    );
+                    DrawFocusRect(
+                        item->hDC,
+                        &focus
+                    );
+                }
+
+                return TRUE;
+            }
+
+            break;
+        }
+
+        case WM_COMMAND:
+        {
+            const int id = LOWORD(wParam);
+
+            if (!authenticated_)
+            {
+                if (id == ID_LOGIN_BUTTON)
+                {
+                    attemptLogin();
+                    return 0;
+                }
+
+                if (id == ID_REGISTER_BUTTON)
+                {
+                    ShellExecuteW(
+                        hwnd_,
+                        L"open",
+                        L"https://launcher.newttech.net/account/user/",
+                        nullptr,
+                        nullptr,
+                        SW_SHOWNORMAL
+                    );
+                    return 0;
+                }
+            }
+
+            break;
+        }
+
+        case WM_ACCOUNT_AVATAR_READY:
+        {
+            auto* result =
+                reinterpret_cast<AccountAvatarReady*>(
+                    lParam
+                );
+
+            if (!result)
+                return 0;
+
+            const std::wstring currentUser =
+                authUser_.minecraftUsername;
+
+            if (
+                authenticated_ &&
+                currentUser == result->username
+            )
+            {
+                const std::wstring key =
+                    L"account-head:" +
+                    result->username;
+
+                auto existing =
+                    imageCache_.find(key);
+
+                if (
+                    existing != imageCache_.end() &&
+                    existing->second
+                )
+                {
+                    DeleteObject(existing->second);
+                }
+
+                imageCache_[key] =
+                    result->bitmap;
+
+                result->bitmap = nullptr;
+
+                InvalidateRect(
+                    hwnd_,
+                    nullptr,
+                    FALSE
+                );
+            }
+
+            if (result->bitmap)
+                DeleteObject(result->bitmap);
+
+            delete result;
+            return 0;
+        }
+
         case WM_TIMER:
         {
+            if (
+                wParam == AUTH_HEARTBEAT_TIMER &&
+                authenticated_
+            )
+            {
+                std::thread([](){ AuthManager::heartbeat(); }).detach();
+                return 0;
+            }
+
             if (
                 wParam == UPDATE_PULSE_TIMER &&
                 updateAvailable_
@@ -1625,6 +2309,9 @@ LRESULT MainWindow::handleMessage(
 
         case WM_SIZE:
         {
+            if (!authenticated_ && loginUsername_)
+                showLoginControls(true);
+
             if (wParam != SIZE_MINIMIZED)
             {
                 InvalidateRect(
@@ -1817,6 +2504,10 @@ LRESULT MainWindow::handleMessage(
                 hwnd_,
                 UPDATE_PULSE_TIMER
             );
+            KillTimer(
+                hwnd_,
+                AUTH_HEARTBEAT_TIMER
+            );
 
             destroyResources();
 
@@ -1935,6 +2626,19 @@ void MainWindow::destroyResources()
 
 void MainWindow::paint(HDC dc)
 {
+    if (!authenticated_)
+    {
+        RECT loginClient{};
+        GetClientRect(hwnd_, &loginClient);
+
+        // Login wall still uses the normal custom window chrome.  Previously
+        // this early return skipped paintTitleBar(), leaving the title-bar
+        // buttons clickable but invisible.
+        paintLoginWall(dc, loginClient);
+        paintTitleBar(dc, loginClient);
+        return;
+    }
+
     RECT fullClient{};
     GetClientRect(
         hwnd_,
@@ -2129,62 +2833,564 @@ void MainWindow::paint(HDC dc)
     DeleteDC(memory);
 }
 
-void MainWindow::paintSidebar(
-    HDC dc,
-    const RECT& client)
+
+void MainWindow::createLoginControls()
 {
-    RECT sidebar{
-        0,
-        0,
-        220,
-        client.bottom
+    loginUsername_ = CreateWindowExW(
+        0, L"EDIT", L"",
+        WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
+        0,0,0,0, hwnd_, (HMENU)ID_LOGIN_USERNAME, instance_, nullptr);
+
+    loginPassword_ = CreateWindowExW(
+        0, L"EDIT", L"",
+        WS_CHILD | WS_TABSTOP | ES_PASSWORD | ES_AUTOHSCROLL,
+        0,0,0,0, hwnd_, (HMENU)ID_LOGIN_PASSWORD, instance_, nullptr);
+
+    loginButton_ = CreateWindowExW(
+        0, L"BUTTON", L"Sign In",
+        WS_CHILD | WS_TABSTOP | BS_OWNERDRAW | BS_DEFPUSHBUTTON,
+        0,0,0,0, hwnd_, (HMENU)ID_LOGIN_BUTTON, instance_, nullptr);
+
+    registerButton_ = CreateWindowExW(
+        0, L"BUTTON", L"Register now",
+        WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+        0,0,0,0, hwnd_, (HMENU)ID_REGISTER_BUTTON, instance_, nullptr);
+
+    for (HWND control : {loginUsername_,loginPassword_,loginButton_,registerButton_})
+        SendMessageW(control, WM_SETFONT, (WPARAM)fontNormal_, TRUE);
+
+    SendMessageW(loginUsername_, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(12,12));
+    SendMessageW(loginPassword_, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(12,12));
+    SendMessageW(loginPassword_, EM_SETPASSWORDCHAR, static_cast<WPARAM>(L'\x2022'), 0);
+
+}
+
+void MainWindow::showLoginControls(bool show)
+{
+    const int cmd = show ? SW_SHOW : SW_HIDE;
+    ShowWindow(loginUsername_,cmd);
+    ShowWindow(loginPassword_,cmd);
+    ShowWindow(loginButton_,cmd);
+    ShowWindow(registerButton_,cmd);
+
+    if(show) {
+        RECT c{}; GetClientRect(hwnd_,&c);
+        const int width=420;
+        const int left=(c.right-width)/2;
+        const int top=270;
+        // Keep the native EDIT controls single-line so ES_PASSWORD works.
+        // The 44px themed field is painted behind them; the actual 28px edit
+        // is vertically centered inside it so Win32's text baseline looks correct.
+        MoveWindow(loginUsername_,left+8,top+8,width-16,28,TRUE);
+        MoveWindow(loginPassword_,left+8,top+90,width-16,28,TRUE);
+        MoveWindow(loginButton_,left,top+156,width,46,TRUE);
+        MoveWindow(registerButton_,left+244,top+222,176,34,TRUE);
+        SetFocus(loginUsername_);
+    }
+}
+
+void MainWindow::attemptLogin()
+{
+    if(authBusy_) return;
+    wchar_t username[256]{}, password[512]{};
+    GetWindowTextW(loginUsername_,username,256);
+    GetWindowTextW(loginPassword_,password,512);
+
+    if(username[0]==0 || password[0]==0) {
+        authError_=L"Enter your username and password.";
+        InvalidateRect(hwnd_,nullptr,FALSE);
+        return;
+    }
+
+    authBusy_=true;
+    authError_=L"Signing in...";
+    EnableWindow(loginButton_,FALSE);
+    InvalidateRect(hwnd_,nullptr,FALSE);
+
+    std::wstring u=username, p=password;
+    std::thread([this,u,p](){
+        AuthUser user; std::wstring error;
+        bool ok=AuthManager::login(u,p,user,error);
+        if(ok) {
+            authUser_=user;
+            authenticated_=true;
+            authError_.clear();
+        } else authError_=error.empty()?L"Invalid username or password.":error;
+        authBusy_=false;
+        PostMessageW(hwnd_,WM_APP+20,ok?1:0,0);
+    }).detach();
+}
+
+void MainWindow::completeAuthenticatedStartup()
+{
+    showLoginControls(false);
+    SetTimer(hwnd_,AUTH_HEARTBEAT_TIMER,60000,nullptr);
+    std::thread([](){ AuthManager::heartbeat(); }).detach();
+    ensureAccountArtwork();
+    refreshPacks();
+    checkForUpdates(false);
+    InvalidateRect(hwnd_,nullptr,FALSE);
+}
+
+void MainWindow::paintLoginWall(HDC dc, const RECT& client)
+{
+    fillRectColor(dc,client,BG);
+
+    const int width = 420;
+    const int left = (client.right - width) / 2;
+
+    drawTextSimple(
+        dc,L"NEWTTECH",
+        RECT{0,72,client.right,122},
+        fontHero_,TEXT,
+        DT_CENTER|DT_SINGLELINE|DT_VCENTER
+    );
+
+    drawTextSimple(
+        dc,L"L A U N C H E R",
+        RECT{0,124,client.right,154},
+        fontNormal_,ACCENT,
+        DT_CENTER|DT_SINGLELINE|DT_VCENTER
+    );
+
+    drawTextSimple(
+        dc,L"Sign in to continue",
+        RECT{0,178,client.right,224},
+        fontTitle_,TEXT,
+        DT_CENTER|DT_SINGLELINE|DT_VCENTER
+    );
+
+    drawTextSimple(
+        dc,L"Username",
+        RECT{left,244,left+width,266},
+        fontSmall_,MUTED,
+        DT_LEFT|DT_SINGLELINE|DT_VCENTER
+    );
+
+    drawTextSimple(
+        dc,L"Password",
+        RECT{left,326,left+width,348},
+        fontSmall_,MUTED,
+        DT_LEFT|DT_SINGLELINE|DT_VCENTER
+    );
+
+    // Full-size themed input surfaces.  The native EDIT windows are inset
+    // vertically so their single-line text is visually centered.
+    RECT usernameField{
+        left,
+        270,
+        left + width,
+        314
+    };
+    RECT passwordField{
+        left,
+        352,
+        left + width,
+        396
     };
 
     fillRectColor(
         dc,
-        sidebar,
-        PANEL
+        usernameField,
+        CARD
+    );
+    fillRectColor(
+        dc,
+        passwordField,
+        CARD
     );
 
+    drawTextSimple(
+        dc,L"Don't have an account?",
+        RECT{left,486,left+240,520},
+        fontSmall_,MUTED,
+        DT_LEFT|DT_VCENTER|DT_SINGLELINE
+    );
+
+    if(!authError_.empty())
+    {
+        drawTextSimple(
+            dc,authError_,
+            RECT{left,548,left+width,604},
+            fontSmall_,
+            authBusy_ ? MUTED : ACCENT,
+            DT_CENTER|DT_WORDBREAK
+        );
+    }
+}
+
+
+void MainWindow::ensureAccountArtwork()
+{
+    if (authUser_.minecraftUsername.empty())
+        return;
+
+    const std::wstring username =
+        authUser_.minecraftUsername;
+
+    const std::wstring displayKey =
+        L"account-head:" + username;
+
+    if (imageCache_.contains(displayKey))
+        return;
+
+    const HWND notifyWindow = hwnd_;
+
+    std::thread(
+        [notifyWindow, username]()
+        {
+            const HRESULT comResult =
+                CoInitializeEx(
+                    nullptr,
+                    COINIT_APARTMENTTHREADED
+                );
+
+            const bool ownsCom =
+                SUCCEEDED(comResult);
+
+            HBITMAP bitmap = nullptr;
+
+            try
+            {
+                // 1. Resolve the Java username through Mojang.
+                const std::wstring profileUrl =
+                    L"https://api.mojang.com/users/profiles/minecraft/" +
+                    username;
+
+                const std::string profileJson =
+                    HttpClient::getUtf8(profileUrl);
+
+                const JsonValue profile =
+                    JsonLite::parse(profileJson);
+
+                const std::string uuidUtf8 =
+                    profile.get("id").asString();
+
+                if (!uuidUtf8.empty())
+                {
+                    const int chars =
+                        MultiByteToWideChar(
+                            CP_UTF8,
+                            0,
+                            uuidUtf8.c_str(),
+                            static_cast<int>(
+                                uuidUtf8.size()
+                            ),
+                            nullptr,
+                            0
+                        );
+
+                    std::wstring uuid(
+                        static_cast<size_t>(chars),
+                        L'\0'
+                    );
+
+                    if (chars > 0)
+                    {
+                        MultiByteToWideChar(
+                            CP_UTF8,
+                            0,
+                            uuidUtf8.c_str(),
+                            static_cast<int>(
+                                uuidUtf8.size()
+                            ),
+                            uuid.data(),
+                            chars
+                        );
+                    }
+
+                    // MCHeads' documented sized-avatar route is:
+                    // /avatar/<UUID>/<size>
+                    const std::wstring avatarUrl =
+                        L"https://mc-heads.net/avatar/" +
+                        uuid +
+                        L"/96";
+
+                    bitmap =
+                        ImageLoader::loadFromUrlPreserveAspect(
+                            avatarUrl,
+                            96,
+                            96
+                        );
+
+                    if (bitmap)
+                    {
+                        auto* result =
+                            new AccountAvatarReady{
+                                username,
+                                uuid,
+                                bitmap
+                            };
+
+                        bitmap = nullptr;
+
+                        if (
+                            !PostMessageW(
+                                notifyWindow,
+                                WM_ACCOUNT_AVATAR_READY,
+                                0,
+                                reinterpret_cast<LPARAM>(
+                                    result
+                                )
+                            )
+                        )
+                        {
+                            if (result->bitmap)
+                                DeleteObject(result->bitmap);
+
+                            delete result;
+                        }
+                    }
+                }
+            }
+            catch (...)
+            {
+                // Cosmetic feature: launcher/login must continue normally.
+            }
+
+            if (bitmap)
+                DeleteObject(bitmap);
+
+            if (ownsCom)
+                CoUninitialize();
+        }
+    ).detach();
+}
+
+RECT MainWindow::sidebarAccountRect() const
+{
+    return RECT{7, 88, 205, 176};
+}
+
+bool MainWindow::homePackInstalled(int index) const
+{
+    if (
+        index < 0 ||
+        index >= static_cast<int>(packs_.size())
+    )
+        return false;
+
+    try
+    {
+        const std::filesystem::path root(
+            InstallEngine::packInstanceRoot(
+                settings_.installRoot,
+                packs_[index].id
+            )
+        );
+
+        return std::filesystem::exists(root);
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+std::vector<int> MainWindow::homeInstalledPacks() const
+{
+    std::vector<int> result;
+
+    for (int i = 0; i < static_cast<int>(packs_.size()); ++i)
+    {
+        if (homePackInstalled(i))
+            result.push_back(i);
+    }
+
+    return result;
+}
+
+int MainWindow::homeFeaturedPack() const
+{
+    const std::vector<int> installed =
+        homeInstalledPacks();
+
+    if (installed.empty())
+        return -1;
+
+    if (
+        selectedPack_ >= 0 &&
+        homePackInstalled(selectedPack_)
+    )
+        return selectedPack_;
+
+    for (const int index : installed)
+    {
+        if (packs_[index].featured)
+            return index;
+    }
+
+    return installed.front();
+}
+
+RECT MainWindow::homeHeroPlayRect(
+    const RECT&) const
+{
+    return RECT{270, 340, 430, 386};
+}
+
+RECT MainWindow::homeHeroViewRect(
+    const RECT&) const
+{
+    return RECT{442, 340, 602, 386};
+}
+
+RECT MainWindow::homeViewAllPacksRect(
+    const RECT& client) const
+{
+    return RECT{
+        client.right - 214,
+        451,
+        client.right - 78,
+        493
+    };
+}
+
+RECT MainWindow::homeCarouselPrevRect(
+    const RECT&) const
+{
+    return RECT{241, 455, 277, 493};
+}
+
+RECT MainWindow::homeCarouselNextRect(
+    const RECT& client) const
+{
+    return RECT{
+        client.right - 66,
+        455,
+        client.right - 30,
+        493
+    };
+}
+
+RECT MainWindow::homeCarouselCardRect(
+    const RECT& client,
+    int slot) const
+{
+    const int left = 286;
+    const int right = static_cast<int>(client.right) - 78;
+    const int gap = 14;
+    const int width =
+        std::max(
+            150,
+            (right - left - gap * 2) / 3
+        );
+
+    const int x =
+        left +
+        slot * (width + gap);
+
+    return RECT{
+        x,
+        505,
+        x + width,
+        690
+    };
+}
+
+void MainWindow::paintSidebar(
+    HDC dc,
+    const RECT& client)
+{
+    RECT sidebar{0,0,220,client.bottom};
+    fillRectColor(dc,sidebar,PANEL);
+    fillRectColor(dc,RECT{219,0,220,client.bottom},BORDER);
+
+    // Logged-in Minecraft account card.
+    const RECT account = sidebarAccountRect();
+    fillRectColor(dc,account,CARD);
     fillRectColor(
         dc,
         RECT{
-            219,
-            0,
-            220,
-            client.bottom
+            account.left,
+            account.top,
+            account.left + 3,
+            account.bottom
         },
-        BORDER
+        ACCENT
     );
+
+    const std::wstring headKey =
+        L"account-head:" +
+        authUser_.minecraftUsername;
+
+    auto headIt =
+        imageCache_.find(headKey);
+
+    if (
+        headIt != imageCache_.end() &&
+        headIt->second
+    )
+    {
+        drawBitmapFit(
+            dc,
+            headIt->second,
+            RECT{
+                account.left + 12,
+                account.top + 14,
+                account.left + 68,
+                account.top + 70
+            }
+        );
+    }
+    else
+    {
+        fillRectColor(
+            dc,
+            RECT{
+                account.left + 12,
+                account.top + 14,
+                account.left + 68,
+                account.top + 70
+            },
+            CARD_SELECTED
+        );
+    }
 
     drawTextSimple(
         dc,
-        L"NEWTTECH",
+        L"Logged in as",
         RECT{
-            16,
-            22,
-            200,
-            50
-        },
-        fontBrand_,
-        TEXT,
-        DT_LEFT |
-        DT_SINGLELINE
-    );
-
-    drawTextSimple(
-        dc,
-        L"L A U N C H E R",
-        RECT{
-            16,
-            51,
-            205,
-            72
+            account.left + 80,
+            account.top + 12,
+            account.right - 8,
+            account.top + 31
         },
         fontSmall_,
-        ACCENT,
+        MUTED,
+        DT_LEFT | DT_SINGLELINE
+    );
+
+    drawTextSimple(
+        dc,
+        authUser_.minecraftUsername.empty()
+            ? authUser_.username
+            : authUser_.minecraftUsername,
+        RECT{
+            account.left + 80,
+            account.top + 32,
+            account.right - 8,
+            account.top + 55
+        },
+        fontNormal_,
+        TEXT,
         DT_LEFT |
-        DT_SINGLELINE
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    drawTextSimple(
+        dc,
+        L"View Account  >",
+        RECT{
+            account.left + 80,
+            account.top + 59,
+            account.right - 8,
+            account.bottom - 8
+        },
+        fontSmall_,
+        CYAN,
+        DT_LEFT | DT_SINGLELINE
     );
 
     const wchar_t* nav[] = {
@@ -2199,22 +3405,13 @@ void MainWindow::paintSidebar(
     {
         RECT row{
             7,
-            105 + i * 52,
-            195,
-            149 + i * 52
+            195 + i * 52,
+            205,
+            239 + i * 52
         };
 
-        if (
-            static_cast<int>(page_) ==
-            i
-        )
-        {
-            fillRectColor(
-                dc,
-                row,
-                CARD
-            );
-        }
+        if (static_cast<int>(page_) == i)
+            fillRectColor(dc,row,CARD);
 
         RECT textRect = row;
         textRect.left += 16;
@@ -2224,49 +3421,22 @@ void MainWindow::paintSidebar(
             nav[i],
             textRect,
             fontNormal_,
-            static_cast<int>(page_) == i
-                ? TEXT
-                : MUTED,
-            DT_LEFT |
-            DT_VCENTER |
-            DT_SINGLELINE
+            static_cast<int>(page_) == i ? TEXT : MUTED,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE
         );
 
-        // Settings is index 4. Pulse a small magenta notification dot when
-        // the server advertises a newer launcher version.
         if (
             i == 4 &&
             updateAvailable_ &&
             updatePulseOn_
         )
         {
-            HBRUSH dotBrush =
-                CreateSolidBrush(
-                    ACCENT
-                );
-
+            HBRUSH dotBrush = CreateSolidBrush(ACCENT);
             HBRUSH oldBrush =
-                static_cast<HBRUSH>(
-                    SelectObject(
-                        dc,
-                        dotBrush
-                    )
-                );
-
-            HPEN dotPen =
-                CreatePen(
-                    PS_SOLID,
-                    1,
-                    ACCENT
-                );
-
+                static_cast<HBRUSH>(SelectObject(dc,dotBrush));
+            HPEN dotPen = CreatePen(PS_SOLID,1,ACCENT);
             HPEN oldPen =
-                static_cast<HPEN>(
-                    SelectObject(
-                        dc,
-                        dotPen
-                    )
-                );
+                static_cast<HPEN>(SelectObject(dc,dotPen));
 
             Ellipse(
                 dc,
@@ -2276,33 +3446,50 @@ void MainWindow::paintSidebar(
                 row.top + 26
             );
 
-            SelectObject(
-                dc,
-                oldPen
-            );
-
-            SelectObject(
-                dc,
-                oldBrush
-            );
-
+            SelectObject(dc,oldPen);
+            SelectObject(dc,oldBrush);
             DeleteObject(dotPen);
             DeleteObject(dotBrush);
         }
     }
 
+    // Brand mark moves below navigation, matching the v0.9 account-first layout.
+    drawTextSimple(
+        dc,
+        L"NEWTTECH",
+        RECT{
+            18,
+            client.bottom - 160,
+            200,
+            client.bottom - 132
+        },
+        fontBrand_,
+        TEXT,
+        DT_LEFT | DT_SINGLELINE
+    );
+
+    drawTextSimple(
+        dc,
+        L"L A U N C H E R",
+        RECT{
+            18,
+            client.bottom - 130,
+            205,
+            client.bottom - 108
+        },
+        fontSmall_,
+        ACCENT,
+        DT_LEFT | DT_SINGLELINE
+    );
+
     RECT status{
         7,
         client.bottom - 90,
-        195,
+        205,
         client.bottom - 20
     };
 
-    fillRectColor(
-        dc,
-        status,
-        CARD
-    );
+    fillRectColor(dc,status,CARD);
 
     drawTextSimple(
         dc,
@@ -2310,13 +3497,12 @@ void MainWindow::paintSidebar(
         RECT{
             19,
             client.bottom - 80,
-            185,
+            195,
             client.bottom - 61
         },
         fontMeta_,
         MUTED,
-        DT_LEFT |
-        DT_SINGLELINE
+        DT_LEFT | DT_SINGLELINE
     );
 
     drawTextSimple(
@@ -2325,13 +3511,12 @@ void MainWindow::paintSidebar(
         RECT{
             19,
             client.bottom - 57,
-            185,
+            195,
             client.bottom - 26
         },
         fontSmall_,
         TEXT,
-        DT_LEFT |
-        DT_WORDBREAK
+        DT_LEFT | DT_WORDBREAK
     );
 }
 
@@ -2498,7 +3683,7 @@ void MainWindow::paintHomeScrollbar(
 RECT MainWindow::newsRefreshRect(
     const RECT& client) const
 {
-    const LONG top = 576;
+    const LONG top = 741;
 
     return RECT{
         client.right - 142,
@@ -2542,8 +3727,8 @@ RECT MainWindow::newsCardRect(
     const LONG width =
         available / count;
 
-    const LONG top = 641;
-    const LONG bottom = 845;
+    const LONG top = 806;
+    const LONG bottom = 1010;
 
     const LONG x =
         left +
@@ -4020,196 +5205,634 @@ void MainWindow::paintHome(
     HDC dc,
     const RECT& client)
 {
+    const std::wstring player =
+        authUser_.minecraftUsername.empty()
+            ? authUser_.username
+            : authUser_.minecraftUsername;
+
+    // v0.9 polish: keep the greeting white but highlight the signed-in
+    // Minecraft username with the launcher's magenta accent.
+    const std::wstring welcomePrefix =
+        L"Welcome back, ";
+
+    RECT welcomeMeasure{0,0,0,0};
+
+    DrawTextW(
+        dc,
+        welcomePrefix.c_str(),
+        -1,
+        &welcomeMeasure,
+        DT_CALCRECT | DT_SINGLELINE
+    );
+
+    // DrawTextW above uses the currently selected font, so select fontTitle_
+    // while measuring to ensure the username begins exactly after the prefix.
+    HFONT oldWelcomeFont =
+        static_cast<HFONT>(
+            SelectObject(
+                dc,
+                fontTitle_
+            )
+        );
+
+    welcomeMeasure = RECT{0,0,0,0};
+
+    DrawTextW(
+        dc,
+        welcomePrefix.c_str(),
+        -1,
+        &welcomeMeasure,
+        DT_CALCRECT | DT_SINGLELINE
+    );
+
+    SelectObject(
+        dc,
+        oldWelcomeFont
+    );
+
+    const LONG welcomeNameX =
+        241 +
+        (welcomeMeasure.right -
+         welcomeMeasure.left);
+
     drawTextSimple(
         dc,
-        L"Home",
+        welcomePrefix,
         RECT{
             241,
             24,
-            500,
-            64
+            welcomeNameX + 4,
+            65
         },
         fontTitle_,
         TEXT,
-        DT_LEFT |
-        DT_SINGLELINE
+        DT_LEFT | DT_SINGLELINE
     );
 
     drawTextSimple(
         dc,
-        L"Your NewtTech modpacks in one place.",
+        player + L" !",
         RECT{
-            241,
-            64,
-            720,
-            92
+            welcomeNameX,
+            24,
+            client.right - 30,
+            65
         },
-        fontNormal_,
-        MUTED,
+        fontTitle_,
+        ACCENT,
         DT_LEFT |
-        DT_SINGLELINE
-    );
-
-    RECT hero{
-        241,
-        118,
-        client.right - 30,
-        290
-    };
-
-    fillRectColor(
-        dc,
-        hero,
-        CARD
-    );
-
-    std::wstring headline =
-        packs_.empty()
-            ? L"No modpacks available"
-            : L"Ready to play?";
-
-    std::wstring description =
-        packs_.empty()
-            ? L"The launcher is connected, but the server is not publishing any enabled packs."
-            : std::to_wstring(packs_.size()) +
-              (packs_.size() == 1
-                  ? L" modpack is available."
-                  : L" modpacks are available.");
-
-    drawTextSimple(
-        dc,
-        headline,
-        RECT{
-            270,
-            150,
-            client.right - 60,
-            205
-        },
-        fontHero_,
-        TEXT,
-        DT_LEFT |
-        DT_SINGLELINE
-    );
-
-    drawTextSimple(
-        dc,
-        description,
-        RECT{
-            271,
-            215,
-            client.right - 60,
-            255
-        },
-        fontNormal_,
-        MUTED,
-        DT_LEFT |
-        DT_WORDBREAK
-    );
-
-    RECT openPacks{
-        250,
-        310,
-        420,
-        356
-    };
-
-    fillRectColor(
-        dc,
-        openPacks,
-        ACCENT
-    );
-
-    drawTextSimple(
-        dc,
-        L"Browse Modpacks",
-        openPacks,
-        fontNormal_,
-        TEXT_DARK,
-        DT_CENTER |
-        DT_VCENTER |
-        DT_SINGLELINE
-    );
-
-    RECT card1{
-        241,
-        388,
-        520,
-        530
-    };
-
-    RECT card2{
-        542,
-        388,
-        821,
-        530
-    };
-
-    fillRectColor(dc,card1,PANEL);
-    fillRectColor(dc,card2,PANEL);
-
-    drawTextSimple(
-        dc,
-        L"INSTALL LOCATION",
-        RECT{262,408,490,430},
-        fontMeta_,
-        MUTED,
-        DT_LEFT |
-        DT_SINGLELINE
-    );
-
-    drawTextSimple(
-        dc,
-        basenameForDisplay(
-            settings_.installRoot
-        ),
-        RECT{262,440,492,482},
-        fontNormal_,
-        TEXT,
-        DT_LEFT |
-        DT_WORDBREAK |
+        DT_SINGLELINE |
         DT_END_ELLIPSIS
     );
 
-    InstallProgress progressCopy;
+    drawTextSimple(
+        dc,
+        L"Manage your modpacks, keep up with updates, and jump into your next adventure.",
+        RECT{241,66,client.right - 30,94},
+        fontNormal_,
+        MUTED,
+        DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS
+    );
+
+    const int featured =
+        homeFeaturedPack();
+
+    RECT hero{
+        241,
+        112,
+        client.right - 30,
+        410
+    };
+
+    fillRectColor(dc,hero,CARD);
+
+    if (featured >= 0)
     {
-        std::lock_guard<std::mutex> lock(
-            progressMutex_
+        const Modpack& pack =
+            packs_[featured];
+
+        const std::wstring bannerKey =
+            L"banner:" + pack.bannerUrl;
+
+        auto bannerIt =
+            imageCache_.find(bannerKey);
+
+        if (
+            bannerIt != imageCache_.end() &&
+            bannerIt->second
+        )
+        {
+            drawBitmapCover(
+                dc,
+                bannerIt->second,
+                hero
+            );
+        }
+
+        /*
+            v0.9 featured-banner polish:
+            Keep the banner visible across the ENTIRE hero and fade the
+            launcher's panel color from opaque on the text side to fully
+            transparent toward the artwork.
+
+            We build a one-row premultiplied BGRA DIB and stretch it over the
+            hero. AlphaBlend is already used elsewhere by the launcher.
+        */
+        RECT info{
+            hero.left,
+            hero.top,
+            std::min<LONG>(
+                hero.right,
+                hero.left + 610
+            ),
+            hero.bottom
+        };
+
+        const int fadeWidth =
+            std::max(
+                1,
+                static_cast<int>(
+                    info.right - info.left
+                )
+            );
+
+        BITMAPINFO fadeInfo{};
+        fadeInfo.bmiHeader.biSize =
+            sizeof(BITMAPINFOHEADER);
+        fadeInfo.bmiHeader.biWidth =
+            fadeWidth;
+        fadeInfo.bmiHeader.biHeight =
+            -1;
+        fadeInfo.bmiHeader.biPlanes = 1;
+        fadeInfo.bmiHeader.biBitCount = 32;
+        fadeInfo.bmiHeader.biCompression =
+            BI_RGB;
+
+        void* fadePixels = nullptr;
+
+        HBITMAP fadeBitmap =
+            CreateDIBSection(
+                dc,
+                &fadeInfo,
+                DIB_RGB_COLORS,
+                &fadePixels,
+                nullptr,
+                0
+            );
+
+        if (fadeBitmap && fadePixels)
+        {
+            auto* pixels =
+                static_cast<unsigned char*>(
+                    fadePixels
+                );
+
+            const unsigned char panelR =
+                GetRValue(PANEL);
+            const unsigned char panelG =
+                GetGValue(PANEL);
+            const unsigned char panelB =
+                GetBValue(PANEL);
+
+            for (int px = 0; px < fadeWidth; ++px)
+            {
+                const double t =
+                    fadeWidth <= 1
+                        ? 1.0
+                        : static_cast<double>(px) /
+                          static_cast<double>(
+                              fadeWidth - 1
+                          );
+
+                /*
+                    Hold the left side nearly opaque so the pack text remains
+                    easy to read, then smoothly reveal the banner. The eased
+                    falloff avoids a visible vertical seam.
+                */
+                double alphaFactor = 0.0;
+
+                if (t < 0.34)
+                {
+                    alphaFactor = 0.96;
+                }
+                else
+                {
+                    const double fadeT =
+                        (t - 0.34) / 0.66;
+
+                    const double eased =
+                        fadeT * fadeT *
+                        (3.0 - 2.0 * fadeT);
+
+                    alphaFactor =
+                        0.96 * (1.0 - eased);
+                }
+
+                const unsigned char alpha =
+                    static_cast<unsigned char>(
+                        255.0 * alphaFactor
+                    );
+
+                // AlphaBlend expects premultiplied BGRA source pixels.
+                pixels[px * 4 + 0] =
+                    static_cast<unsigned char>(
+                        panelB * alpha / 255
+                    );
+                pixels[px * 4 + 1] =
+                    static_cast<unsigned char>(
+                        panelG * alpha / 255
+                    );
+                pixels[px * 4 + 2] =
+                    static_cast<unsigned char>(
+                        panelR * alpha / 255
+                    );
+                pixels[px * 4 + 3] =
+                    alpha;
+            }
+
+            HDC fadeDc =
+                CreateCompatibleDC(dc);
+
+            if (fadeDc)
+            {
+                HBITMAP oldFade =
+                    static_cast<HBITMAP>(
+                        SelectObject(
+                            fadeDc,
+                            fadeBitmap
+                        )
+                    );
+
+                BLENDFUNCTION fadeBlend{};
+                fadeBlend.BlendOp =
+                    AC_SRC_OVER;
+                fadeBlend.BlendFlags = 0;
+                fadeBlend.SourceConstantAlpha =
+                    255;
+                fadeBlend.AlphaFormat =
+                    AC_SRC_ALPHA;
+
+                AlphaBlend(
+                    dc,
+                    info.left,
+                    info.top,
+                    fadeWidth,
+                    info.bottom - info.top,
+                    fadeDc,
+                    0,
+                    0,
+                    fadeWidth,
+                    1,
+                    fadeBlend
+                );
+
+                SelectObject(
+                    fadeDc,
+                    oldFade
+                );
+
+                DeleteDC(fadeDc);
+            }
+
+            DeleteObject(fadeBitmap);
+        }
+
+        drawTextSimple(
+            dc,
+            L"FEATURED MODPACK",
+            RECT{
+                info.left + 28,
+                info.top + 24,
+                info.right - 20,
+                info.top + 47
+            },
+            fontMeta_,
+            CYAN,
+            DT_LEFT | DT_SINGLELINE
         );
-        progressCopy =
-            installProgress_;
+
+        drawTextSimple(
+            dc,
+            pack.name,
+            RECT{
+                info.left + 28,
+                info.top + 58,
+                info.right - 20,
+                info.top + 105
+            },
+            fontHero_,
+            TEXT,
+            DT_LEFT |
+            DT_SINGLELINE |
+            DT_END_ELLIPSIS
+        );
+
+        // The description can extend into the transparent portion of the
+        // hero gradient. Use the launcher's cyan and a stronger font weight
+        // so it keeps contrast against bright or detailed banner artwork.
+        drawTextSimple(
+            dc,
+            pack.description,
+            RECT{
+                info.left + 28,
+                info.top + 118,
+                info.right - 24,
+                info.top + 202
+            },
+            fontNormal_,
+            CYAN,
+            DT_LEFT |
+            DT_WORDBREAK |
+            DT_END_ELLIPSIS
+        );
+
+        const RECT play =
+            homeHeroPlayRect(client);
+
+        const RECT view =
+            homeHeroViewRect(client);
+
+        fillRectColor(dc,play,ACCENT);
+        fillRectColor(dc,view,CARD_SELECTED);
+
+        drawTextSimple(
+            dc,
+            L"Play Now",
+            play,
+            fontNormal_,
+            TEXT_DARK,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE
+        );
+
+        drawTextSimple(
+            dc,
+            L"View Modpack",
+            view,
+            fontNormal_,
+            TEXT,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE
+        );
+    }
+    else
+    {
+        drawTextSimple(
+            dc,
+            L"No installed modpacks yet",
+            RECT{
+                hero.left + 28,
+                hero.top + 60,
+                hero.right - 28,
+                hero.top + 105
+            },
+            fontHero_,
+            TEXT,
+            DT_LEFT | DT_SINGLELINE
+        );
+
+        drawTextSimple(
+            dc,
+            L"Install a modpack from the Modpacks tab and it will appear here.",
+            RECT{
+                hero.left + 28,
+                hero.top + 125,
+                hero.right - 28,
+                hero.top + 175
+            },
+            fontNormal_,
+            MUTED,
+            DT_LEFT | DT_WORDBREAK
+        );
     }
 
+    // Installed-pack carousel.
     drawTextSimple(
         dc,
-        L"DOWNLOAD STATUS",
-        RECT{563,408,792,430},
-        fontMeta_,
-        MUTED,
-        DT_LEFT |
-        DT_SINGLELINE
+        L"YOUR MODPACKS",
+        RECT{286,455,client.right - 245,490},
+        fontTitle_,
+        TEXT,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE
+    );
+
+    const RECT viewAll =
+        homeViewAllPacksRect(client);
+
+    fillRectColor(dc,viewAll,CARD_SELECTED);
+
+    drawTextSimple(
+        dc,
+        L"View All Modpacks  >",
+        viewAll,
+        fontSmall_,
+        TEXT,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE
+    );
+
+    const std::vector<int> installed =
+        homeInstalledPacks();
+
+    const int maxOffset =
+        std::max(
+            0,
+            static_cast<int>(installed.size()) - 3
+        );
+
+    homeCarouselOffset_ =
+        std::clamp(
+            homeCarouselOffset_,
+            0,
+            maxOffset
+        );
+
+    const RECT prev =
+        homeCarouselPrevRect(client);
+
+    const RECT next =
+        homeCarouselNextRect(client);
+
+    fillRectColor(
+        dc,
+        prev,
+        homeCarouselOffset_ > 0
+            ? CARD_SELECTED
+            : PANEL
+    );
+
+    fillRectColor(
+        dc,
+        next,
+        homeCarouselOffset_ < maxOffset
+            ? CARD_SELECTED
+            : PANEL
     );
 
     drawTextSimple(
         dc,
-        progressCopy.active
-            ? progressCopy.title
-            : L"No active downloads",
-        RECT{563,440,792,482},
-        fontNormal_,
-        progressCopy.active
-            ? CYAN
-            : TEXT,
-        DT_LEFT |
-        DT_WORDBREAK
+        L"<",
+        prev,
+        fontTitle_,
+        homeCarouselOffset_ > 0 ? CYAN : MUTED,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE
     );
+
+    drawTextSimple(
+        dc,
+        L">",
+        next,
+        fontTitle_,
+        homeCarouselOffset_ < maxOffset ? CYAN : MUTED,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE
+    );
+
+    if (installed.empty())
+    {
+        drawTextSimple(
+            dc,
+            L"Your installed modpacks will appear here.",
+            RECT{286,520,client.right - 78,570},
+            fontNormal_,
+            MUTED,
+            DT_LEFT | DT_SINGLELINE
+        );
+    }
+    else
+    {
+        for (int slot = 0; slot < 3; ++slot)
+        {
+            const int position =
+                homeCarouselOffset_ + slot;
+
+            if (
+                position >=
+                static_cast<int>(installed.size())
+            )
+                break;
+
+            const int index =
+                installed[position];
+
+            const Modpack& pack =
+                packs_[index];
+
+            const RECT card =
+                homeCarouselCardRect(
+                    client,
+                    slot
+                );
+
+            fillRectColor(
+                dc,
+                card,
+                index == featured
+                    ? CARD_SELECTED
+                    : PANEL
+            );
+
+            fillRectColor(
+                dc,
+                RECT{
+                    card.left,
+                    card.top,
+                    card.right,
+                    card.top + 3
+                },
+                index == featured
+                    ? ACCENT
+                    : CYAN
+            );
+
+            const RECT banner{
+                card.left,
+                card.top + 3,
+                card.right,
+                card.top + 98
+            };
+
+            const std::wstring bannerKey =
+                L"banner:" +
+                pack.bannerUrl;
+
+            auto bannerIt =
+                imageCache_.find(
+                    bannerKey
+                );
+
+            if (
+                bannerIt != imageCache_.end() &&
+                bannerIt->second
+            )
+            {
+                drawBitmapCover(
+                    dc,
+                    bannerIt->second,
+                    banner
+                );
+            }
+            else
+            {
+                fillRectColor(
+                    dc,
+                    banner,
+                    CARD
+                );
+            }
+
+            drawTextSimple(
+                dc,
+                pack.name,
+                RECT{
+                    card.left + 12,
+                    card.top + 110,
+                    card.right - 12,
+                    card.top + 137
+                },
+                fontNormal_,
+                TEXT,
+                DT_LEFT |
+                DT_SINGLELINE |
+                DT_END_ELLIPSIS
+            );
+
+            drawTextSimple(
+                dc,
+                L"Installed",
+                RECT{
+                    card.left + 12,
+                    card.top + 140,
+                    card.right - 12,
+                    card.top + 162
+                },
+                fontSmall_,
+                MUTED,
+                DT_LEFT |
+                DT_SINGLELINE |
+                DT_END_ELLIPSIS
+            );
+
+            drawTextSimple(
+                dc,
+                index == featured
+                    ? L"Selected"
+                    : L"Select",
+                RECT{
+                    card.left + 12,
+                    card.bottom - 24,
+                    card.right - 12,
+                    card.bottom - 7
+                },
+                fontSmall_,
+                index == featured
+                    ? ACCENT
+                    : CYAN,
+                DT_RIGHT | DT_SINGLELINE
+            );
+        }
+    }
 
     /*
-        News & Updates
-        ----------------
-        The header and cards live on the virtual Home canvas so they scroll
-        naturally with the rest of the Home page.
+        News & Updates now begins below the v0.9 installed-pack carousel.
     */
-    const LONG newsTop = 565;
+    const LONG newsTop = 730;
 
     RECT newsHeader{
         241,
@@ -4218,12 +5841,7 @@ void MainWindow::paintHome(
         newsTop + 64
     };
 
-    fillRectColor(
-        dc,
-        newsHeader,
-        CARD
-    );
-
+    fillRectColor(dc,newsHeader,CARD);
     fillRectColor(
         dc,
         RECT{
@@ -4246,8 +5864,7 @@ void MainWindow::paintHome(
         },
         fontMeta_,
         CYAN,
-        DT_LEFT |
-        DT_SINGLELINE
+        DT_LEFT | DT_SINGLELINE
     );
 
     drawTextSimple(
@@ -4269,11 +5886,7 @@ void MainWindow::paintHome(
     const RECT refresh =
         newsRefreshRect(client);
 
-    fillRectColor(
-        dc,
-        refresh,
-        PANEL
-    );
+    fillRectColor(dc,refresh,PANEL);
 
     drawTextSimple(
         dc,
@@ -4281,9 +5894,7 @@ void MainWindow::paintHome(
         refresh,
         fontSmall_,
         TEXT,
-        DT_CENTER |
-        DT_VCENTER |
-        DT_SINGLELINE
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE
     );
 
     if (news_.empty())
@@ -4295,11 +5906,7 @@ void MainWindow::paintHome(
             newsHeader.bottom + 198
         };
 
-        fillRectColor(
-            dc,
-            emptyCard,
-            PANEL
-        );
+        fillRectColor(dc,emptyCard,PANEL);
 
         drawTextSimple(
             dc,
@@ -4312,8 +5919,7 @@ void MainWindow::paintHome(
             },
             fontNormal_,
             TEXT,
-            DT_LEFT |
-            DT_SINGLELINE
+            DT_LEFT | DT_SINGLELINE
         );
 
         drawTextSimple(
@@ -4327,8 +5933,7 @@ void MainWindow::paintHome(
             },
             fontSmall_,
             MUTED,
-            DT_LEFT |
-            DT_WORDBREAK
+            DT_LEFT | DT_WORDBREAK
         );
     }
     else
@@ -4352,12 +5957,7 @@ void MainWindow::paintHome(
                     i
                 );
 
-            fillRectColor(
-                dc,
-                card,
-                PANEL
-            );
-
+            fillRectColor(dc,card,PANEL);
             fillRectColor(
                 dc,
                 RECT{
@@ -4366,9 +5966,7 @@ void MainWindow::paintHome(
                     card.right,
                     card.top + 4
                 },
-                item.pinned
-                    ? ACCENT
-                    : CYAN
+                item.pinned ? ACCENT : CYAN
             );
 
             LONG textLeft =
@@ -4377,13 +5975,10 @@ void MainWindow::paintHome(
             if (!item.imageUrl.empty())
             {
                 const std::wstring imageKey =
-                    L"news:" +
-                    item.imageUrl;
+                    L"news:" + item.imageUrl;
 
                 auto it =
-                    imageCache_.find(
-                        imageKey
-                    );
+                    imageCache_.find(imageKey);
 
                 if (
                     it != imageCache_.end() &&
@@ -4397,14 +5992,8 @@ void MainWindow::paintHome(
                         card.top + 106
                     };
 
-                    drawBitmapFit(
-                        dc,
-                        it->second,
-                        thumb
-                    );
-
-                    textLeft =
-                        thumb.right + 14;
+                    drawBitmapFit(dc,it->second,thumb);
+                    textLeft = thumb.right + 14;
                 }
             }
 
@@ -4420,9 +6009,7 @@ void MainWindow::paintHome(
                     card.top + 37
                 },
                 fontMeta_,
-                item.pinned
-                    ? ACCENT
-                    : CYAN,
+                item.pinned ? ACCENT : CYAN,
                 DT_LEFT |
                 DT_SINGLELINE |
                 DT_END_ELLIPSIS
@@ -4487,12 +6074,10 @@ void MainWindow::paintHome(
                 },
                 fontSmall_,
                 CYAN,
-                DT_RIGHT |
-                DT_SINGLELINE
+                DT_RIGHT | DT_SINGLELINE
             );
         }
     }
-
 }
 
 void MainWindow::paintModpacks(
@@ -5706,6 +7291,113 @@ void MainWindow::paintMediaModal(
 }
 
 
+
+int MainWindow::settingsViewportHeight(
+    const RECT& client) const
+{
+    return std::max<int>(
+        120,
+        static_cast<int>(client.bottom) - 8
+    );
+}
+
+int MainWindow::settingsMaxScroll(
+    const RECT& client) const
+{
+    return std::max(
+        0,
+        settingsContentHeight_ -
+        settingsViewportHeight(client)
+    );
+}
+
+RECT MainWindow::settingsScrollbarTrackRect(
+    const RECT& client) const
+{
+    return RECT{
+        client.right - 10,
+        104,
+        client.right - 3,
+        client.bottom - 8
+    };
+}
+
+RECT MainWindow::settingsScrollbarThumbRect(
+    const RECT& client) const
+{
+    RECT track =
+        settingsScrollbarTrackRect(client);
+
+    const int trackHeight =
+        static_cast<int>(
+            track.bottom - track.top
+        );
+
+    if (
+        trackHeight <= 0 ||
+        settingsMaxScroll(client) <= 0
+    )
+    {
+        return track;
+    }
+
+    const int viewport =
+        settingsViewportHeight(client);
+
+    const int thumbHeight =
+        std::max(
+            42,
+            static_cast<int>(
+                (static_cast<long long>(trackHeight) *
+                 viewport) /
+                settingsContentHeight_
+            )
+        );
+
+    const int travel =
+        std::max(
+            1,
+            trackHeight - thumbHeight
+        );
+
+    const int top =
+        track.top +
+        static_cast<int>(
+            (static_cast<long long>(travel) *
+             settingsScrollY_) /
+            settingsMaxScroll(client)
+        );
+
+    return RECT{
+        track.left,
+        top,
+        track.right,
+        top + thumbHeight
+    };
+}
+
+void MainWindow::clampSettingsScroll(
+    const RECT& client)
+{
+    settingsScrollY_ =
+        std::clamp(
+            settingsScrollY_,
+            0,
+            settingsMaxScroll(client)
+        );
+}
+
+RECT MainWindow::accountLogoutRect(
+    const RECT& client) const
+{
+    return RECT{
+        client.right - 170,
+        746,
+        client.right - 48,
+        788
+    };
+}
+
 RECT MainWindow::updateCheckRect(
     const RECT& client) const
 {
@@ -6066,6 +7758,9 @@ void MainWindow::paintSettings(
     HDC dc,
     const RECT& client)
 {
+    // Keep the Settings heading fixed. Only the card/content region below it
+    // scrolls, and clip that region so scrolled cards can never paint over
+    // the heading/subtitle.
     drawTextSimple(
         dc,
         L"Settings",
@@ -6094,6 +7789,23 @@ void MainWindow::paintSettings(
         MUTED,
         DT_LEFT |
         DT_SINGLELINE
+    );
+
+    const int savedDc = SaveDC(dc);
+
+    IntersectClipRect(
+        dc,
+        220,
+        100,
+        client.right,
+        client.bottom
+    );
+
+    OffsetViewportOrgEx(
+        dc,
+        0,
+        -settingsScrollY_,
+        nullptr
     );
 
     RECT location{
@@ -6401,6 +8113,125 @@ void MainWindow::paintSettings(
             DT_CENTER |
             DT_VCENTER |
             DT_SINGLELINE
+        );
+    }
+
+
+    RECT account{
+        241,
+        712,
+        client.right - 30,
+        824
+    };
+
+    fillRectColor(
+        dc,
+        account,
+        PANEL
+    );
+
+    drawTextSimple(
+        dc,
+        L"ACCOUNT",
+        RECT{
+            270,
+            734,
+            client.right - 210,
+            756
+        },
+        fontMeta_,
+        CYAN,
+        DT_LEFT |
+        DT_SINGLELINE
+    );
+
+    const std::wstring accountName =
+        authUser_.name.empty()
+            ? authUser_.username
+            : authUser_.name;
+
+    drawTextSimple(
+        dc,
+        accountName,
+        RECT{
+            270,
+            763,
+            client.right - 220,
+            787
+        },
+        fontNormal_,
+        TEXT,
+        DT_LEFT |
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    const std::wstring accountDetails =
+        L"@" +
+        authUser_.username +
+        L"   •   Minecraft: " +
+        authUser_.minecraftUsername +
+        L"   •   Signed in";
+
+    drawTextSimple(
+        dc,
+        accountDetails,
+        RECT{
+            270,
+            790,
+            client.right - 220,
+            812
+        },
+        fontSmall_,
+        SUCCESS,
+        DT_LEFT |
+        DT_SINGLELINE |
+        DT_END_ELLIPSIS
+    );
+
+    const RECT logout =
+        accountLogoutRect(client);
+
+    fillRectColor(
+        dc,
+        logout,
+        CARD
+    );
+
+    drawTextSimple(
+        dc,
+        L"Sign Out",
+        logout,
+        fontNormal_,
+        ACCENT,
+        DT_CENTER |
+        DT_VCENTER |
+        DT_SINGLELINE
+    );
+
+    RestoreDC(
+        dc,
+        savedDc
+    );
+
+    if (settingsMaxScroll(client) > 0)
+    {
+        const RECT track =
+            settingsScrollbarTrackRect(client);
+
+        const RECT thumb =
+            settingsScrollbarThumbRect(client);
+
+        fillRectColor(
+            dc,
+            track,
+            RGB(10, 28, 49)
+        );
+
+        fillRectColor(
+            dc,
+            thumb,
+            RGB(35, 76, 112)
         );
     }
 }
@@ -7298,6 +9129,7 @@ void MainWindow::refreshPacks()
     packs_.clear();
     currentManifest_ = {};
     selectedPack_ = -1;
+    homeCarouselOffset_ = 0;
 
     InvalidateRect(
         hwnd_,
@@ -8636,32 +10468,19 @@ int MainWindow::hitTestSidebar(
     int x,
     int y) const
 {
-    if (
-        x < 7 ||
-        x > 195
-    )
+    if (x < 7 || x > 205)
         return -1;
 
-    for (
-        int i = 0;
-        i < 5;
-        ++i
-    )
+    for (int i = 0; i < 5; ++i)
     {
         RECT row{
             7,
-            105 + i * 52,
-            195,
-            149 + i * 52
+            195 + i * 52,
+            205,
+            239 + i * 52
         };
 
-        if (
-            pointInRect(
-                x,
-                y,
-                row
-            )
-        )
+        if (pointInRect(x,y,row))
             return i;
     }
 

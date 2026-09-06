@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "InstallEngine.h"
+#include "AuthManager.h"
 #include "Models.h"
 #include "NewsManager.h"
 #include "Settings.h"
@@ -31,6 +32,15 @@ private:
     };
 
     HINSTANCE instance_ = nullptr;
+
+    bool authenticated_ = false;
+    bool authBusy_ = false;
+    AuthUser authUser_;
+    std::wstring authError_;
+    HWND loginUsername_ = nullptr;
+    HWND loginPassword_ = nullptr;
+    HWND loginButton_ = nullptr;
+    HWND registerButton_ = nullptr;
     HWND hwnd_ = nullptr;
 
     Page page_ = Page::Modpacks;
@@ -111,10 +121,22 @@ private:
 
     std::unordered_map<std::wstring, HBITMAP> imageCache_;
 
+    // v0.9 Home / account card
+    int homeCarouselOffset_ = 0;
+
     static constexpr UINT WM_INSTALL_PROGRESS = WM_APP + 1;
     static constexpr UINT WM_INSTALL_DONE = WM_APP + 2;
     static constexpr UINT WM_UPDATE_CHECK_DONE = WM_APP + 3;
     static constexpr UINT UPDATE_PULSE_TIMER = 41;
+    static constexpr UINT AUTH_HEARTBEAT_TIMER = 42;
+    int settingsScrollY_ = 0;
+    int settingsContentHeight_ = 850;
+    bool settingsScrollDragging_ = false;
+    int settingsScrollDragOffset_ = 0;
+    static constexpr int ID_LOGIN_USERNAME = 5101;
+    static constexpr int ID_LOGIN_PASSWORD = 5102;
+    static constexpr int ID_LOGIN_BUTTON = 5103;
+    static constexpr int ID_REGISTER_BUTTON = 5104;
 
     static LRESULT CALLBACK windowProc(HWND, UINT, WPARAM, LPARAM);
     LRESULT handleMessage(HWND, UINT, WPARAM, LPARAM);
@@ -123,8 +145,24 @@ private:
     void destroyResources();
 
     void paint(HDC dc);
+    void createLoginControls();
+    void showLoginControls(bool show);
+    void attemptLogin();
+    void completeAuthenticatedStartup();
+    void paintLoginWall(HDC dc, const RECT& client);
     void paintSidebar(HDC dc, const RECT& client);
     void paintHome(HDC dc, const RECT& client);
+    void ensureAccountArtwork();
+    bool homePackInstalled(int index) const;
+    std::vector<int> homeInstalledPacks() const;
+    int homeFeaturedPack() const;
+    RECT homeHeroPlayRect(const RECT& client) const;
+    RECT homeHeroViewRect(const RECT& client) const;
+    RECT homeViewAllPacksRect(const RECT& client) const;
+    RECT homeCarouselPrevRect(const RECT& client) const;
+    RECT homeCarouselNextRect(const RECT& client) const;
+    RECT homeCarouselCardRect(const RECT& client, int slot) const;
+    RECT sidebarAccountRect() const;
     void paintModpacks(HDC dc, const RECT& client);
     void paintDownloads(HDC dc, const RECT& client);
     void paintSettings(HDC dc, const RECT& client);
@@ -191,6 +229,12 @@ private:
         const std::wstring& candidate,
         const std::wstring& current
     );
+    RECT accountLogoutRect(const RECT& client) const;
+    int settingsViewportHeight(const RECT& client) const;
+    int settingsMaxScroll(const RECT& client) const;
+    RECT settingsScrollbarTrackRect(const RECT& client) const;
+    RECT settingsScrollbarThumbRect(const RECT& client) const;
+    void clampSettingsScroll(const RECT& client);
     RECT updateCheckRect(const RECT& client) const;
     RECT updateNowRect(const RECT& client) const;
 
@@ -217,7 +261,7 @@ private:
     RECT memoryPlusRect(const RECT& client) const;
 
     // Home page scrolling
-    static constexpr int HOME_CONTENT_HEIGHT = 980;
+    static constexpr int HOME_CONTENT_HEIGHT = 1280;
     int homeScrollY_ = 0;
     bool homeScrollbarDragging_ = false;
     int homeScrollbarDragOffset_ = 0;
