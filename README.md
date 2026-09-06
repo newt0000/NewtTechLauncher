@@ -155,6 +155,7 @@ the media tab is used to see ingame screenshots in collapsable tab sections for 
 <p align="center">
   <img src="assets/screenshots/media.png" alt="media tab" width="900">
 </p>
+
 ### Settings
 
 Launcher preferences and configurable behavior are available from the Settings section.
