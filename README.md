@@ -146,7 +146,7 @@ The Downloads section provides a dedicated view for launcher-managed download ac
 The Home & News tab provides a landing spot for viewing updated, feature changes, news and info about the launcher.
 
 <p align="center">
-  <img src="assets/screenshots/homenews.png" alt="NewtTech Launcher Downloads page" width="900">
+  <img src="assets/screenshots/homenews0.9.png" alt="NewtTech Launcher Downloads page" width="900">
 </p>
 
 ### Media
@@ -160,7 +160,7 @@ the media tab is used to see ingame screenshots in collapsable tab sections for 
 Launcher preferences and configurable behavior are available from the Settings section.
 
 <p align="center">
-  <img src="assets/screenshots/settings.png" alt="NewtTech Launcher Settings page" width="900">
+  <img src="assets/screenshots/settings0.9.png" alt="NewtTech Launcher Settings page" width="900">
 </p>
 
 ---
