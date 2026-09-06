@@ -7898,7 +7898,7 @@ void MainWindow::paintSettings(
 
     drawTextSimple(
         dc,
-        L"RECOMMENDED MEMORY",
+        L"ALLOCATED MEMORY",
         RECT{
             270,
             330,
